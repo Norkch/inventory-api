@@ -47,3 +47,7 @@ Sin MediatR: los handlers son clases explícitas.
 - Nunca subir .env ni secretos. Actualizar .env.example al añadir una variable.
 - Los movimientos de inventario son inmutables: sin actualizar, sin borrar.
 - Terminar cada respuesta con un breve resumen de lo que cambió y de lo que se verificó.
+
+## Documentación actualizada
+- Antes de usar una API de EF Core 6, Dapper, JwtBearer 6 o Swashbuckle 6, consultar Context7 con la versión indicada en el stack. No asumir la API de memoria.
+- Si Context7 devuelve documentación de otra versión mayor, ignorarla y avisar.
