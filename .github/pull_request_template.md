@@ -8,7 +8,6 @@
 - [ ] La propuesta y las especificaciones están revisadas
 - [ ] Escribí la prueba antes del código (RED → GREEN → REFACTOR)
 - [ ] `dotnet build` y `dotnet test` en verde
-- [ ] `python scripts/check_clean_code.py src tests` sin hallazgos
 - [ ] Revisión con `clean-code-review` en sesión nueva (hallazgos abajo)
 - [ ] Verificado con `docker compose up -d --build` y Swagger
 - [ ] Actualicé `docs/bitacora.md` y `docs/ai-usage.md`
