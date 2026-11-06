@@ -1,0 +1,42 @@
+schema: spec-driven
+
+# Project context (optional)
+# Add only constraints that should guide OpenSpec artifacts and workflows.
+# Include constraints an agent cannot infer by reading the code.
+# Keep general project documentation and discoverable codebase facts out.
+# Example:
+#   context: |
+#     Designs and tasks must cover Windows, macOS, and Linux
+#     Write all artifacts in Spanish
+
+# Per-artifact rules (optional)
+# Add custom rules for specific artifacts.
+# Example:
+#   rules:
+#     proposal:
+#       - Keep proposals under 500 words
+#       - Always state what is out of scope
+#     tasks:
+#       - Break tasks into chunks of max 2 hours
+
+# Per-operation guidance (optional)
+# Add advisory guidance for how apply and archive work should be conducted.
+# This is separate from artifact rules above.
+# Example:
+#   operations:
+#     apply:
+#       guidance:
+#         - Keep test summaries concise
+#     archive:
+#       guidance:
+#         - Summarize the archive outcome before finishing
+context: |
+  Idioma: español. Escribe todos los artefactos (propuesta, especificaciones, diseño y tareas) en español.
+  Mantén en inglés los encabezados estructurales de OpenSpec (## ADDED Requirements, ### Requirement:,
+  #### Scenario:) y las palabras clave SHALL, MUST, WHEN, THEN y AND, porque la validación depende de ellas.
+  Mantén en inglés los identificadores de código, las rutas de archivo y los nombres de las capacidades.
+  Proyecto: API REST de inventario (categorías, productos, proveedores, precios y movimientos).
+  Stack: .NET 6 (net6.0), C# 10, ASP.NET Core con controladores, SQL Server en Docker sin claves foráneas,
+  Dapper para escribir y EF Core 6 para leer, OAuth2 client_credentials con JWT, xUnit.
+  Arquitectura: Domain, Application, Infrastructure y Api; CQRS con handlers explícitos (sin MediatR).
+  Cada escenario debe poder convertirse en una prueba unitaria. Los mensajes que ve el cliente van en español.
