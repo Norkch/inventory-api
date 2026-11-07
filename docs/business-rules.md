@@ -13,6 +13,7 @@
 | Category | Id, Name, Description, CreatedAtUtc | Nombre único sin distinguir mayúsculas |
 | Product | Id, CategoryId, Sku, Name, Description, StockQuantity, IsActive, CreatedAtUtc, UpdatedAtUtc | El stock solo cambia con movimientos |
 | InventoryMovement | Id, ProductId, MovementType, Quantity, StockAfter, Reason, OccurredAtUtc, RegisteredBy |Inmutable |
+| ProductSupplier | Id, ProductId, SupplierId, SupplierSku, CreatedAtUtc |Relación muchos a muchos entre producto y proveedor |
 
 ## Reglas
 | ID | Regla | Tipo | Respuesta ante incumplimiento |
