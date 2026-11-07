@@ -1,0 +1,11 @@
+**/bin
+**/obj
+.git
+.vs
+.vscode
+.env
+tests
+docs
+openspec
+.claude
+node_modules
