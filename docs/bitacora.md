@@ -7,6 +7,6 @@
 - **Cambio de OpenSpec:** ``
 - **Hecho:**
 - **Verificación:** [comandos ejecutados y resultado: `dotnet build`]
-- **Problemas:** Validar que versiones descargar para los paquetes nugets
-- **Aprendí:**
+- **Problemas:** Validar que versiones descargar para los paquetes nugets. Problemas con sqlserver en docker debido a la lentitud del pc.
+- **Aprendí:** Modificar valores de espera y reintentos en .yml
 - **Evidencia:** ISSUE #9
