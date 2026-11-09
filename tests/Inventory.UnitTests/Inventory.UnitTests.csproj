@@ -22,6 +22,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\..\src\Inventory.Api\Inventory.Api.csproj" />
     <ProjectReference Include="..\..\src\Inventory.Application\Inventory.Application.csproj" />
   </ItemGroup>
 
