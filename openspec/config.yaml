@@ -37,6 +37,8 @@ context: |
   Mantén en inglés los identificadores de código, las rutas de archivo y los nombres de las capacidades.
   Proyecto: API REST de inventario (categorías, productos, proveedores, precios y movimientos).
   Stack: .NET 6 (net6.0), C# 10, ASP.NET Core con controladores, SQL Server en Docker sin claves foráneas,
-  Dapper para escribir y EF Core 6 para leer, OAuth2 client_credentials con JWT, xUnit.
+  Dapper para escribir y EF Core 6 para leer, xUnit.
+  Autenticación: OAuth2 client_credentials con Keycloak como servidor de identidad. La API valida los JWT
+  (emisor, audiencia, firma y scopes); no los emite ni guarda credenciales de clientes.
   Arquitectura: Domain, Application, Infrastructure y Api; CQRS con handlers explícitos (sin MediatR).
   Cada escenario debe poder convertirse en una prueba unitaria. Los mensajes que ve el cliente van en español.

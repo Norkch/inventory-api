@@ -7,7 +7,7 @@ API REST para gestionar productos, categorías, proveedores y movimientos de inv
 - Los paquetes NuGet deben ser compatibles con la versión 6.x (EF Core 6, JwtBearer 6, Swashbuckle 6). Preguntar antes de añadir cualquier paquete
 - SQL Server 2022 en Docker. SIN llaves foráneas: la integridad se garantiza en la aplicación
 - Escrituras: Dapper. Lecturas: Entity Framework Core (AsNoTracking)
-- Autenticación: OAuth2 client_credentials, JWT bearer, scopes inventory.read e inventory.write
+- Autenticación: OAuth2 client_credentials. Keycloak (Docker) emite los JWT; la API solo los valida (JwtBearer). Scopes inventory.read e inventory.write
 - Pruebas: xUnit y fakes escritos a mano. Cobertura con Coverlet
 - Docker y docker-compose
 
@@ -16,8 +16,8 @@ Capas: Domain <- Application <- Infrastructure <- Api. Las dependencias apuntan 
 - Domain: entidades, enums, excepciones de dominio, Guard. Sin paquetes.
 - Los movimientos de inventario son el libro inmutable del stock: nunca se actualizan ni se borran. 
 - Application: comandos, consultas, handlers, puertos (interfaces), DTOs.
-- Infrastructure: repositorios de escritura con Dapper, repositorios de lectura con EF Core, servicio de tokens, opciones.
-- Api: controladores, manejo de excepciones, Swagger, raíz de composición.
+- Infrastructure: repositorios de escritura con Dapper, repositorios de lectura con EF Core, opciones.
+- Api: controladores, manejo de excepciones, Swagger, validación de JWT contra Keycloak y políticas de scope, raíz de composición.
 CQRS: los handlers de comandos usan puertos de escritura (Dapper). Los handlers de consultas usan puertos de lectura (EF Core). Nunca se mezclan.
 Sin MediatR: los handlers son clases explícitas.
 
