@@ -21,8 +21,8 @@
 | BR-01 | El SKU es obligatorio, único (sin distinguir mayúsculas), se recorta y tiene máximo 50 caracteres | 400 si falta, 409 si ya existe |
 | BR-02 | El nombre del producto es obligatorio (máximo 200 caracteres) | 400 |
 | BR-03 | Un producto debe pertenecer a una categoría existente |  400 |
-| BR-04 | El nombre de categoría es obligatorio, único y de máximo 100 caracteres | 400 o 409 |
-| BR-05 | No se puede eliminar una categoría con productos activos | 409 |
+| BR-04 | El nombre de categoría es obligatorio, único y de máximo 100 caracteres, sin distinguir mayúsculas,se recorta| 400 o 409 |
+| BR-05 | No se puede eliminar una categoría con productos activos ni inactivos| 409 |
 | BR-06 | Eliminar un producto es lógico (`IsActive = false`) y conserva sus movimientos | 404 si ya no está activo |
 | BR-07 | Un producto nuevo empieza con stock 0; el stock solo cambia con movimientos | El campo se ignora |
 | BR-08 | Un proveedor tiene nombre (máximo 200) y NIT (máximo 30) obligatorios; el NIT es único | 400 o 409 |

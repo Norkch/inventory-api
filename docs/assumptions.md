@@ -68,3 +68,16 @@ La revisión de Clean Code de la tarea 8.2 dejó tres hallazgos menores. Se acep
 - **`"scope"` y `"azp"` repetidos en `ScopePolicies` y `AuthController`.**
   - No es una de las siete reglas. Son dos constantes privadas, cada una en la clase que la usa.
   - Se moverán a una clase `TokenClaimTypes` cuando un tercer consumidor las necesite, por ejemplo los controladores del entregable 3.
+
+## add-categories (2026-11-09)
+
+### `Category.Create` recibe el nombre, la descripción y la fecha por separado
+
+- La regla 7 pide pasar objetos en lugar de propiedades sueltas. `Category.Create(string? name, string? description, DateTime createdAtUtc)` recibe tres valores porque son los datos con los que nace la entidad, y Domain no puede conocer `CreateCategoryCommand` (las dependencias apuntan hacia adentro).
+- No se crea un objeto intermedio en Domain solo para agrupar esos tres valores. Si el revisor de Clean Code lo marca, se reconsiderará en la tarea 4.2, que es la que llama a `Create`.
+- El mismo criterio se aplica a `PageRequest.Create(int? page, int? pageSize)` (tarea 3.1): los dos valores son los datos con los que nace la petición de página. Lo llamará `ListCategoriesHandler` en la tarea 4.5.
+
+### Tratamiento de la descripción de una categoría
+
+- `specs/categories` exige que una descripción vacía o solo con espacios se guarde como `null` y que se recorte antes de comprobar el máximo de 500 caracteres.
+- Se asume que una descripción de exactamente 500 caracteres es válida (el límite incluido), igual que los 100 del nombre.
