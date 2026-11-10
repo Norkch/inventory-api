@@ -15,6 +15,8 @@ public sealed class InventoryReadDbContext : DbContext
 
     public DbSet<ProductRecord> Products => Set<ProductRecord>();
 
+    public DbSet<MovementRecord> Movements => Set<MovementRecord>();
+
     protected override void OnConfiguring(DbContextOptionsBuilder optionsBuilder)
     {
         optionsBuilder.UseQueryTrackingBehavior(QueryTrackingBehavior.NoTracking);
@@ -28,6 +30,16 @@ public sealed class InventoryReadDbContext : DbContext
         category.Property(record => record.Name).HasMaxLength(Category.NameMaxLength).IsRequired();
         category.Property(record => record.Description).HasMaxLength(Category.DescriptionMaxLength);
         MapProducts(modelBuilder);
+        MapMovements(modelBuilder);
+    }
+
+    private static void MapMovements(ModelBuilder modelBuilder)
+    {
+        var movement = modelBuilder.Entity<MovementRecord>();
+        movement.ToTable("InventoryMovements", "dbo");
+        movement.HasKey(record => record.Id);
+        movement.Property(record => record.Reason).HasMaxLength(MovementRules.ReasonMaxLength);
+        movement.Property(record => record.RegisteredBy).HasMaxLength(MovementRules.RegisteredByMaxLength).IsRequired();
     }
 
     private static void MapProducts(ModelBuilder modelBuilder)

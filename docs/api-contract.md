@@ -46,8 +46,9 @@ Toda ruta bajo `/api` exige un token bearer válido. Un token es válido cuando 
 - `iss` es igual a `Auth__Issuer`.
 - `aud` contiene `Auth__Audience`.
 - No ha caducado. Se tolera un desfase de reloj de 30 s después de `exp`.
+- Trae un claim `sub` no vacío (`add-inventory-movements`). Con el realm actual todos los tokens lo traen. Un token sin `sub`, o con un `sub` vacío o solo con espacios, recibe 401 en **todos** los endpoints, porque `sub` es el autor de los movimientos.
 
-Los claims se leen con el nombre que traen en el token, sin renombrarlos: `azp` es el id del cliente y `scope` es la lista de scopes.
+Los claims se leen con el nombre que traen en el token, sin renombrarlos: `azp` es el id del cliente, `scope` es la lista de scopes y `sub` es el identificador del usuario de servicio del cliente (un UUID).
 
 ### Comprobación de scopes
 
@@ -67,7 +68,7 @@ La API devuelve 401 y 403 **con el cuerpo vacío**. No usa ProblemDetails para e
 
 | Código | Cuándo | Cuerpo |
 |---|---|---|
-| 401 Unauthorized | Falta la cabecera `Authorization`, la firma no es válida, el token caducó, `iss` es de otro emisor o `aud` no contiene la audiencia configurada | Vacío. La cabecera `WWW-Authenticate: Bearer ...` indica el motivo |
+| 401 Unauthorized | Falta la cabecera `Authorization`, la firma no es válida, el token caducó, `iss` es de otro emisor, `aud` no contiene la audiencia configurada o falta el claim `sub` | Vacío. La cabecera `WWW-Authenticate: Bearer ...` indica el motivo |
 | 403 Forbidden | El token es válido, pero no tiene el scope que exige el endpoint | Vacío |
 
 Una regla rápida para diferenciarlos: 401 significa que la API no acepta el token, y 403 que lo acepta pero el token no tiene el permiso.
@@ -404,7 +405,7 @@ La comprobación de productos activos y la desactivación se hacen en una sola s
 
 ## Productos (`add-products`)
 
-Los productos pertenecen a una categoría activa y llevan su stock. El stock solo se lee: lo cambiarán los movimientos de inventario, que no son parte de este cambio.
+Los productos pertenecen a una categoría activa y llevan su stock. Los endpoints de productos solo leen el stock: únicamente lo cambian los [movimientos de inventario](#movimientos-de-inventario-add-inventory-movements).
 
 ### Endpoints
 
@@ -575,3 +576,118 @@ Borrado lógico (BR-06): el producto pasa a inactivo y la fila se conserva.
 - **Los movimientos se conservan:** el borrado no toca el libro de movimientos.
 - **El SKU no se libera** (ver arriba).
 - Borrar el único producto activo de una categoría permite desactivar después esa categoría (BR-05).
+
+## Movimientos de inventario (`add-inventory-movements`)
+
+Los movimientos son el libro inmutable del stock: cada entrada o salida cambia `stockQuantity` del producto y queda registrada para siempre. Los endpoints están anidados bajo el producto, porque cada movimiento pertenece a un único producto.
+
+### Endpoints
+
+| Método y ruta | Scope exigido | Éxito | Errores con ProblemDetails | Sin token o token inválido | Token sin el scope |
+|---|---|---|---|---|---|
+| `POST /api/products/{productId}/movements` | `inventory.write` | 201 | 400, 404, 409 | 401 | 403 |
+| `GET /api/products/{productId}/movements?page&pageSize` | `inventory.read` | 200 | 400, 404 | 401 | 403 |
+
+- 401 y 403 llegan con el cuerpo vacío, igual que en el resto de la API.
+- `{productId}` solo coincide con un GUID (`{productId:guid}`). Cualquier otro valor responde 404 con el cuerpo vacío.
+- **No existen `PUT`, `PATCH` ni `DELETE`** (BR-13). Un movimiento no se modifica ni se borra: una corrección es un movimiento nuevo. `DELETE /api/products/{productId}/movements` responde 405, y cualquier ruta con un id de movimiento (`/movements/{movementId}`) responde 404.
+
+### Representación de un movimiento
+
+La misma en la respuesta 201 y en cada elemento del listado:
+
+```json
+{
+  "id": "6c37cac6-82b0-4dee-9421-84f101b7f143",
+  "productId": "e927dbd0-7f26-4060-af94-fd93130d45b6",
+  "type": "Entry",
+  "quantity": 10,
+  "stockAfter": 10,
+  "reason": "Compra inicial",
+  "occurredAtUtc": "2026-11-10T19:23:46.4112896Z",
+  "registeredBy": "ee59fce2-7335-40b0-801b-92b834dc40d7"
+}
+```
+
+| Campo | Tipo | Contenido |
+|---|---|---|
+| `id` | GUID | Lo genera la API al registrar el movimiento |
+| `productId` | GUID | Producto al que pertenece |
+| `type` | string | Siempre en su forma canónica: `"Entry"` o `"Exit"` |
+| `quantity` | entero | Mayor que 0 |
+| `stockAfter` | entero | `stockQuantity` del producto justo después de aplicar el movimiento |
+| `reason` | string o `null` | Motivo recortado, de 1 a 250 caracteres, o `null` |
+| `occurredAtUtc` | fecha y hora ISO 8601 | Momento del registro, en UTC, fijado por la API |
+| `registeredBy` | string | Claim `sub` del token con el que se registró (el UUID del usuario de servicio del cliente en Keycloak, no el id del cliente) |
+
+La respuesta 201 escribe `occurredAtUtc` con el sufijo `Z`. El listado lo escribe sin sufijo, porque sale de una columna `datetime2`, igual que `createdAtUtc` en categorías y productos. El valor siempre está en UTC.
+
+### `POST /api/products/{productId}/movements`
+
+Registra una entrada o una salida y responde **201 sin cabecera `Location`**. A diferencia de categorías y productos, no existe un recurso individual de movimiento que consultar, así que no se envía un enlace que daría 404 (ver `docs/assumptions.md`). Todo lo que el cliente necesita, incluido `stockAfter`, va en el cuerpo de la respuesta.
+
+Cuerpo de la petición:
+
+```json
+{
+  "type": "Entry",
+  "quantity": 10,
+  "reason": "Compra inicial"
+}
+```
+
+| Campo | Obligatorio | Reglas |
+|---|---|---|
+| `type` | Sí | `Entry` o `Exit` (BR-11). Se recorta y no distingue mayúsculas: `" entry "` es válido y se devuelve como `"Entry"`. Cualquier otro texto, incluidos `"1"` o `"3"`, responde 400 |
+| `quantity` | Sí | Entero mayor que 0 (BR-11) |
+| `reason` | No | Se recorta. Vacío o solo con espacios se guarda como `null`. Máximo 250 caracteres después de recortar |
+
+Los campos que no son parte del contrato se ignoran sin error: `supplierId` (el proveedor llegará con BR-16), `stockAfter`, `occurredAtUtc`, `registeredBy` y cualquier otro. El autor siempre sale del token, nunca del cuerpo.
+
+| Situación | Respuesta |
+|---|---|
+| Entrada válida sobre un producto activo | 201; el stock sube en `quantity` |
+| Salida válida que cabe en el stock | 201; el stock baja en `quantity`. Una salida igual al stock deja `stockAfter` en 0 |
+| `type` ausente o en blanco | 400: `El tipo de movimiento es obligatorio.` |
+| `type` con otro valor | 400: `El tipo de movimiento debe ser 'Entry' o 'Exit'.` |
+| `quantity` ausente | 400: `La cantidad del movimiento es obligatoria.` |
+| `quantity` igual a 0 o negativa | 400: `La cantidad del movimiento debe ser un entero mayor que 0.` |
+| `reason` de más de 250 caracteres | 400: `El motivo del movimiento no puede superar los 250 caracteres.` |
+| `type` como número JSON (`1`) o `quantity` decimal (`1.5`) | 400: `El cuerpo de la petición no es un JSON válido.` |
+| Producto inexistente o borrado | 404: `No existe un producto activo con el id '{productId}'.`; no se registra nada |
+| Salida mayor que el stock disponible | 409: `El stock disponible del producto es insuficiente para la salida.`; el stock no cambia (BR-12) |
+| Entrada que llevaría el stock por encima de 2147483647 | 409: `La entrada supera el stock máximo permitido para el producto.`; el stock no cambia |
+
+- **El stock nunca es negativo** (BR-12).
+- **Todo o nada** (BR-14): el cambio de stock y el registro del movimiento ocurren en una sola transacción. Si algo falla, el producto conserva su stock y la respuesta es 500 sin detalles.
+- **Salidas simultáneas** (BR-15): si varias salidas del mismo producto llegan a la vez y no hay stock para todas, solo se aceptan las que caben, y las demás reciben 409. Por ejemplo, con stock 5, dos salidas de 4 a la vez: una responde 201 con `stockAfter` 1 y la otra 409.
+- Registrar un movimiento **no cambia `updatedAtUtc`** del producto, que sigue indicando la última edición del catálogo.
+
+#### Orden de los errores
+
+Si una petición tiene varios problemas, se responde solo el primero, en este orden:
+
+1. Formato del cuerpo: `type`, `quantity` y `reason` (400).
+2. Producto inexistente o borrado (404).
+3. Stock insuficiente o desbordamiento (409).
+
+Por ejemplo, `quantity` 0 sobre un producto inexistente responde 400, y una salida excesiva sobre un producto borrado responde 404.
+
+### `GET /api/products/{productId}/movements`
+
+Lista los movimientos del producto, paginados (BR-18), **del más reciente al más antiguo**: por `occurredAtUtc` descendente y, a igualdad de fecha, por `id` descendente. Ese desempate es arbitrario pero estable, así que la misma consulta devuelve siempre el mismo orden.
+
+| Parámetro de consulta | Tipo | Por defecto | Reglas |
+|---|---|---|---|
+| `page` | entero | 1 | Desde 1 |
+| `pageSize` | entero | 20 | De 1 a 100 |
+
+La respuesta tiene la misma forma que los demás listados (`{ items, page, pageSize, totalCount, totalPages }`), y cada elemento de `items` es un movimiento completo. Solo incluye los movimientos de ese producto.
+
+| Situación | Respuesta |
+|---|---|
+| Producto activo con movimientos | 200 con la página pedida |
+| Producto activo sin movimientos | 200 con `items` vacío y `totalCount` 0 |
+| Producto inexistente | 404: `No existe un producto activo con el id '{productId}'.` |
+| Producto borrado, aunque conserve movimientos | 404 con el mismo mensaje (DEC-004) |
+| `page` o `pageSize` fuera de rango | 400 con el mensaje de categorías. Se comprueba **antes** que el producto: `?page=0` sobre un producto borrado responde 400 |

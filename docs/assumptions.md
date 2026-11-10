@@ -171,3 +171,83 @@ La revisión de Clean Code de la tarea 8.2 dejó tres hallazgos menores. Se acep
 
 - El orden y los filtros del listado, la búsqueda con `LIKE ... ESCAPE` y `COLLATE`, la collation de `init.sql`, el SKU de un producto borrado y los dos casos de concurrencia no tienen prueba automática. EF Core InMemory no traduce `EF.Functions.Like` con escape ni `Collate`, y un SQL Server de pruebas (Testcontainers u otro) exige un paquete nuevo, que hay que aprobar antes.
 - Se verificaron todos a mano con Docker en la tarea 9.1 (`docs/bitacora.md`). Queda como deuda un proyecto de pruebas de integración en un cambio futuro.
+
+## add-inventory-movements (2026-11-10)
+
+### APIs de ASP.NET Core 6, JwtBearer 6, Dapper 2.1 y EF Core 6 confirmadas para movimientos (tarea 1.1)
+
+- **Aviso sobre la versión de ASP.NET Core y EF Core:** Context7 (`/dotnet/aspnetcore.docs` y `/dotnet/entityframework.docs`) no separa la documentación por versión y sirve la rama `main`, de versiones mayores posteriores a la 6. Se ignoró lo que es propio de esas versiones; por ejemplo, los operadores `Order` y `OrderDescending` de EF Core 9, que no se usan. Cada firma se comprobó en los XML del paquete de referencia `Microsoft.AspNetCore.App.Ref` `6.0.36` (`ref/net6.0`) y del paquete `microsoft.aspnetcore.authentication.jwtbearer` `6.0.36` de la caché de NuGet.
+- **JwtBearer 6.0.36 (D6):**
+  - `JwtBearerOptions.Events` admite una instancia de `JwtBearerEvents` en la que solo se asignan los delegados que interesan.
+  - `JwtBearerEvents.OnTokenValidated` se invoca después de que el token pase la validación y se haya generado el `ClaimsIdentity`. Es el punto en el que ya se pueden leer los claims.
+  - `TokenValidatedContext` hereda de `ResultContext<JwtBearerOptions>`: `Principal` da el `ClaimsPrincipal` y `Fail(string failureMessage)` marca la autenticación como fallida. Context7 documenta este uso de `Fail` para la autenticación por certificado y `OnTokenValidated` en la documentación de las versiones 3 a 7.
+  - Que `Fail` acabe en un 401 con el cuerpo vacío no está documentado en el XML. Se comprueba con la prueba de la tarea 2.2 y en vivo en la tarea 8.1.
+- **Respuesta 201 sin `Location` (D7):** el XML de `ControllerBase.Created(string uri, object value)` y de `CreatedResult(string location, object value)` no documenta qué ocurre con una URI nula. Por eso no se usa `Created`, sino `ControllerBase.StatusCode(int statusCode, object value)`, que crea un `ObjectResult` con ese código y ese cuerpo y no añade ninguna cabecera. La prueba del controlador (tarea 7.1) comprueba que no hay `Location`.
+- **Dapper 2.1.89** (`lib/netstandard2.0`; Context7 `/dapperlib/dapper/2.1.66`, misma versión mayor y menor) (D3):
+  - `CommandDefinition(string commandText, object? parameters = null, IDbTransaction? transaction = null, ..., CancellationToken cancellationToken = default)`: la transacción se pasa en cada comando.
+  - La transacción se abre con `DbConnection.BeginTransactionAsync` de ADO.NET, no con Dapper. Está en el XML de `Microsoft.NETCore.App.Ref` `6.0.36` (`System.Data.Common`). `QuerySingleOrDefaultAsync<T>(CommandDefinition)` lee el `OUTPUT INSERTED.StockQuantity` y `ExecuteAsync(CommandDefinition)` ejecuta el `INSERT`, como ya se confirmó en `add-products`.
+  - El código de error `8115` (desbordamiento aritmético) es de SQL Server, no de Dapper. Se lee de `SqlException.Number`, como el 2601/2627 del SKU, y se comprueba en vivo en la tarea 8.1.
+- **EF Core 6.0.36 (D5):**
+  - `OrderByDescending`, `ThenByDescending`, `Skip` y `Take` se traducen a SQL, igual que el `OrderBy`/`ThenBy` que ya usa `ProductReadRepository`.
+  - El proveedor de SQL Server asocia `byte` a `tinyint` (Context7 lo muestra en la tabla de conversiones, `Convert.ToByte` a `CONVERT(tinyint, ...)`). `MovementRecord.MovementType` se declara `byte` para leer la columna `TINYINT`. Se comprueba con la base en la tarea 8.1.
+
+### `sub` como autor del movimiento y 401 sin `sub` en todos los endpoints (tarea 2.2)
+
+- Con `client_credentials`, Keycloak emite como `sub` el UUID del usuario de servicio del cliente (`service-account-inventory-client`), no el id legible del cliente (`azp`). `RegisteredBy` guardará ese UUID, porque así lo pide la propuesta. Si se quiere el nombre del cliente habrá que decidirlo en otro cambio: los movimientos ya registrados no se pueden corregir.
+- `OnTokenValidated` rechaza los tokens sin `sub`, o con un `sub` vacío o solo con espacios, con `context.Fail(...)`. Se aplica a **todos** los endpoints bajo `/api`, incluidas las lecturas y `whoami`, no solo a los movimientos (D6). Con el realm actual todos los tokens traen `sub` (client scope `basic`), así que ningún cliente existente queda fuera. Un cliente nuevo sin ese scope recibiría 401 en cualquier endpoint.
+- El mensaje de `Fail` está en inglés porque no llega al cliente: el 401 se responde con el cuerpo vacío.
+
+### El autor del movimiento no se recorta (tarea 3.1)
+
+- `MovementRules.ValidateRegisteredBy` comprueba que el autor no esté en blanco y que no supere 100 caracteres, pero lo devuelve **tal cual**, sin recortarlo. A diferencia de `type` y `reason`, no lo escribe el cliente: es el `sub` del token, y el libro debe guardar la identidad exactamente como la emitió Keycloak.
+- `MovementType` declara `byte` como tipo subyacente, con `Entry = 1` y `Exit = 2`, para coincidir con la columna `TINYINT` y su `CHECK IN (1, 2)`.
+
+### `InventoryMovement.Create` recibe un `MovementDraft` (tarea 3.2, regla 7)
+
+- `Create` necesitaría seis valores sueltos (producto, tipo, cantidad, motivo, autor y fecha). Para no pasarlos sueltos recibe el record de dominio `MovementDraft`, igual que `Product.Restore` recibe `ProductSnapshot`. El handler de la tarea 5.1 lo construye a partir del comando, del `MovementRegistrant` y de `IClock`.
+- El `Id` se genera dentro de `Create` con `Guid.NewGuid()`, como en `Product.Create`. La fecha sí llega en el draft.
+- `StockAfter` es `null` hasta que el repositorio aplica el movimiento. `WithStockAfter(int)` devuelve una copia con el saldo y deja intacto el original, para que la entidad siga siendo inmutable.
+
+### `ConflictException` deja de ser `sealed` (tarea 3.3)
+
+- D4 pide que `InsufficientStockException` herede de `ConflictException` para que `ExceptionHandlingMiddleware` la traduzca a 409 sin cambios. Para eso `ConflictException` pasa de `sealed` a `public class`. Las demás excepciones de dominio siguen selladas, igual que `InsufficientStockException`.
+- La alternativa era una excepción independiente con un caso nuevo en el `switch` del middleware. Se descartó porque obligaba a tocar Api por una regla del dominio, y porque "stock insuficiente" es, por definición, un conflicto con el estado del recurso.
+
+### Condición del `UPDATE` de stock sin suma (tarea 6.1)
+
+- `MovementWriteRepository` usa `WHERE Id = @ProductId AND IsActive = 1 AND StockQuantity >= -@Delta`, no `StockQuantity + @Delta >= 0` como decía al principio D3 (ya corregido en `design.md`).
+- Motivo: SQL Server no garantiza el orden en que evalúa los predicados de un `WHERE`. Con la suma, una entrada sobre un producto borrado con stock cercano a `int.MaxValue` podría lanzar el error 8115 antes de descartar la fila por `IsActive`, y respondería 409 en lugar del 404 que fija la spec. `-@Delta` no se desborda nunca, porque `quantity` es como máximo `int.MaxValue`.
+- La transacción se abre de forma explícita (`OpenAsync` y `BeginTransactionAsync`). Solo se confirma cuando el resultado es `Registered`. En cualquier otro caso (rechazo, error 8115 o fallo del `INSERT`), al liberar la transacción sin `Commit` se hace rollback.
+
+### El tipo del movimiento se convierte a texto en memoria (tarea 6.2)
+
+- `MovementReadRepository.ListAsync` filtra, ordena (`OccurredAtUtc DESC`, `Id DESC`), cuenta y pagina en SQL. Después materializa los `MovementRecord` de esa página y los convierte a `MovementDto` en memoria, con `((MovementType)record.MovementType).ToString()`.
+- Se hace así para no depender de que EF Core 6 traduzca a SQL la conversión de un `byte` a enum y después a texto. Como solo se convierte una página, de 100 elementos como máximo, el coste es despreciable.
+- `ExistsActiveProductAsync` consulta `Products` con `AnyAsync`, que se traduce a `EXISTS`.
+
+### 201 sin `Location` al registrar un movimiento (tarea 7.3)
+
+- `POST /api/products/{productId}/movements` responde 201 **sin** cabecera `Location`, a diferencia de categorías y productos. No existe un `GET` de un movimiento suelto, y la propuesta no lo pide. RFC 9110 permite un 201 sin `Location`.
+- Se descartaron dos alternativas. Apuntar `Location` a la colección no identifica el recurso creado. Apuntarla a `/movements/{id}` daría un enlace que responde 404.
+- Si un cambio futuro añade el `GET` por id, se podrá añadir la cabecera sin romper a ningún cliente. El cuerpo ya trae `id` y `stockAfter`.
+
+### El orden por fecha puede no reflejar el orden de aplicación (tarea 7.3, D5)
+
+- `occurredAtUtc` lo fija `IClock` en el handler, **antes** de que el `UPDATE` obtenga el bloqueo de la fila del producto. Si dos movimientos del mismo producto llegan a la vez, el que espera el bloqueo puede tener una hora anterior y, aun así, aplicarse después. En el listado aparecería como "más antiguo", aunque su `stockAfter` corresponda a un estado posterior.
+- Se acepta porque la ventana es de milisegundos, solo afecta a movimientos simultáneos del mismo producto, y el saldo autoritativo sigue siendo `stockAfter` de cada movimiento y `Products.StockQuantity`. La alternativa, fijar la hora en SQL con `SYSUTCDATETIME()` después del bloqueo, rompía la convención de que `IClock` da la fecha a los comandos y quitaba a las pruebas el control sobre la hora.
+- El desempate por `Id DESC` es arbitrario (los GUID son aleatorios) pero estable: la misma consulta devuelve siempre el mismo orden, y la paginación no repite ni salta movimientos.
+
+### Hallazgos aceptados en la revisión de Clean Code de la tarea 8.2
+
+- **Ayudas de prueba con valores sueltos (regla 7):** `CreateCommand(type, quantity, reason)` en `RegisterMovementHandlerTests` y `CreateDraft(type, quantity, reason)` en `InventoryMovementTests` reciben tres valores. Se acepta, como en las pruebas de productos, porque son ayudas de prueba y cada prueba varía justo esos tres valores. Cuando hace falta cambiar otro campo se usa `with` sobre el objeto que devuelven.
+- **Escenarios sin prueba automática:** estos escenarios dependen de SQL Server y solo se verifican a mano (tarea 8.1, `docs/bitacora.md`, E5):
+  - el orden `OccurredAtUtc DESC, Id DESC` y el filtro por producto;
+  - la paginación sobre datos reales;
+  - la atomicidad (BR-14) y las salidas simultáneas (BR-15);
+  - la traducción del error 8115 a 409;
+  - que `updatedAtUtc` no cambia;
+  - los 405 y 404 de `DELETE`, `PATCH` y `PUT`;
+  - los 400 de `type` numérico y `quantity` decimal, que produce el deserializador.
+
+  `MovementWriteRepository` y `MovementReadRepository` no tienen prueba unitaria. Es la misma deuda que ya registró `add-products`: un proyecto de pruebas de integración contra SQL Server exige un paquete nuevo, que hay que aprobar antes.
+- **Prueba BR-15 eliminada:** `BR15_Rejects_ExitThatLostTheRaceForTheStock` era idéntica a la de BR-12 y su nombre prometía una concurrencia que no probaba. BR-15 la garantiza el `UPDATE` condicional en la base, no el handler, así que su verificación es la de la tarea 8.1 (5 rondas de salidas simultáneas, siempre `[201, 409]`).

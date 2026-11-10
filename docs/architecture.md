@@ -48,7 +48,15 @@ Sin MediatR: los handlers son clases explícitas que se inyectan donde se usan.
 | GetProductById | Consulta | `GetProductByIdHandler` (`GetProductByIdQuery`) | `IProductReadRepository` | `ProductReadRepository` (EF Core, `join` con `Categories`) | `ProductDto` de un producto activo con `CategoryName`; 404 si no hay ninguno |
 | ListProducts | Consulta | `ListProductsHandler` (`ListProductsQuery`) | `IProductReadRepository` | `ProductReadRepository` (EF Core, `EF.Functions.Like` con escape) | `PagedResult<ProductDto>` con los activos, filtrados por `categoryId` y `search`, por `Name` y luego `Id` (BR-18) |
 
-El dominio valida los productos con `ProductRules`, que usan `Product.Create` (alta) y `ProductChanges.Create` (edición, sin SKU ni stock). En Api, `AddPersistence` registra lo que comparten todos los módulos (`IClock`, `SqlConnectionFactory` e `InventoryReadDbContext`), y `AddCategories` y `AddProducts` registran cada uno sus puertos y handlers.
+El dominio valida los productos con `ProductRules`, que usan `Product.Create` (alta) y `ProductChanges.Create` (edición, sin SKU ni stock). En Api, `AddPersistence` registra lo que comparten todos los módulos (`IClock`, `SqlConnectionFactory` e `InventoryReadDbContext`), y `AddCategories`, `AddProducts` y `AddMovements` registran cada uno sus puertos y handlers.
+
+### Casos de uso de movimientos (`add-inventory-movements`)
+| Caso de uso | Tipo | Handler | Puerto | Implementación | Resultado |
+|---|---|---|---|---|---|
+| RegisterMovement | Comando | `RegisterMovementHandler` (`RegisterMovementCommand` con `MovementRegistrant`) | `IMovementWriteRepository` + `IClock` | `MovementWriteRepository` (Dapper, transacción con `UPDATE ... OUTPUT INSERTED.StockQuantity` condicional e `INSERT`) | `MovementDto` con `StockAfter`; el puerto devuelve `MovementRegistrationResult` y el handler lo traduce: 404 (`ProductNotFound`), 409 (`InsufficientStock`, `StockOverflow`) |
+| ListMovements | Consulta | `ListMovementsHandler` (`ListMovementsQuery`) | `IMovementReadRepository` | `MovementReadRepository` (EF Core, `ExistsActiveProductAsync` y listado) | `PagedResult<MovementDto>` por `OccurredAtUtc` y luego `Id`, los dos descendentes (BR-18); 404 si el producto no está activo |
+
+El dominio valida los movimientos con `MovementRules`, que usa `InventoryMovement.Create(MovementDraft)`. `MovementsController` no tiene acciones `PUT`, `PATCH` ni `DELETE` (BR-13), y responde el 201 sin `Location`.
 
 ### Piezas comunes (`Application/Common`)
 - `PageRequest`: `PageRequest.Create(page, pageSize)` aplica los valores por defecto (1 y 20) y valida los rangos de BR-18. Lanza `ValidationException` con un mensaje en español que nombra `page` o `pageSize`. La reutilizarán todos los listados.
@@ -100,7 +108,8 @@ HTTP POST /api/products/{id}/movements
   - Las claves de firma se obtienen de la metadata de `Auth__MetadataAddress` (`jwks_uri`, dentro de la red de Docker).
   - `iss` debe ser `Auth__Issuer` y `aud` debe contener `Auth__Audience`.
   - Se comprueba la caducidad con una tolerancia de reloj de 30 s.
-  - Los claims se leen con su nombre original (`azp`, `scope`).
+  - Los claims se leen con su nombre original (`azp`, `scope`, `sub`).
+  - El token debe traer un claim `sub` no vacío. `OnTokenValidated` lo comprueba con `SubjectClaimRequirement` y, si falta, rechaza el token con 401 en todos los endpoints. `sub` es el autor (`RegisteredBy`) de los movimientos.
 - Scopes: `ScopeSet` (`Application/Security/`) separa el claim `scope` y comprueba cada scope como elemento completo, distinguiendo mayúsculas. Las políticas `InventoryRead` e `InventoryWrite` (`Api/Authorization/ScopePolicies`) lo usan.
 - Un token inválido o ausente recibe 401 y un token sin el scope exigido, 403, ambos con el cuerpo vacío (ver `api-contract.md`).
 - Los errores del flujo OAuth2 (secreto incorrecto, scope inválido, etc.) los devuelve Keycloak, no la API.
@@ -111,7 +120,7 @@ HTTP POST /api/products/{id}/movements
 |---|---|
 | ValidationException | 400 |
 | NotFoundException | 404 |
-| ConflictException, InsufficientStockException | 409 |
+| ConflictException e InsufficientStockException (hereda de ConflictException) | 409 |
 | Error inesperado | 500, sin detalles internos |
 
 Las respuestas de error usan `application/problem+json`, con el middleware propio.

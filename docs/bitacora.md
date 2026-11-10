@@ -362,3 +362,119 @@ Los tres pasos en Swagger UI los hizo a mano la persona responsable del proyecto
 
   Lo que queda sin cubrir es composición o persistencia: `Program`, las extensiones `AddPersistence`, `AddCategories` y `AddProducts`, `ConfigureSwaggerGenOptions`, y los repositorios Dapper y EF Core. Los repositorios se verificaron con Docker en la tarea 9.1. `LikePattern`, que es la única lógica propia de Infrastructure, está cubierta al 100 %.
 - **Aprendí:** el resolutor de tipos funcionaba en todos los casos de la spec, pero la revisión encontró tres entradas que la spec no cubre y que podían dar un 500 o un mensaje equivocado. Una prueba por cada entrada rara salió más barata que razonar sobre todas.
+
+## E5 · Movimientos de inventario — tarea 8.1 (verificación de extremo a extremo)
+- **Fecha:** 10-11-2026
+- **Cambio de OpenSpec:** `add-inventory-movements`
+- **Entorno:** `docker compose up -d --build` sobre el volumen `inventory-api_sqldata`, sin cambios de esquema. Los escenarios los ejecutó un guion de Python fuera del repositorio, con `urllib` para las peticiones, hilos con una barrera para las salidas simultáneas y `sqlcmd` dentro del contenedor (`-I`, por `QUOTED_IDENTIFIER`). Los tokens de `inventory-client` (`read write`, solo `read` y solo `write`) se pidieron a Keycloak con `client_credentials`. Los secretos se leyeron de `.env` sin imprimirlos. Los datos llevan el sufijo `8415` en el nombre de la categoría y en los SKU (`MOV-<caso>-8415`).
+- **Preparación con `sqlcmd`, solo sobre productos de prueba:**
+  - `StockQuantity = 2147483000` en el producto `MOV-MAX-8415`, para el desbordamiento.
+  - Filas en `InventoryMovements` con fechas fijas (`RegisteredBy = 'e2e'`) en `MOV-ORD-8415` y `MOV-TIE-8415`, para el orden y el desempate. Su `StockAfter` no cuadra con el producto: son datos de prueba del listado.
+  - Un `CHECK` temporal, `CK_E2E_ForceInsertFailure`, que rechazaba `Reason = 'FORZAR-FALLO'` para provocar el fallo del `INSERT`. Se eliminó en un `finally` justo después.
+- **Keycloak:** dos clientes temporales creados con la API de administración y borrados al terminar. El guion comprueba que no queda ninguno.
+- **Nota sobre los datos de prueba:** quedan en la base de desarrollo. Los movimientos son inmutables, así que no se borraron; se eliminan con `docker compose down -v`.
+
+### `specs/inventory-movements` y `specs/api-auth` (MODIFIED)
+
+#### Registrar
+
+| Escenario | Petición | Resultado | ¿Esperado? |
+|---|---|---|---|
+| Entrada correcta | `{"type":"Entry","quantity":10,"reason":"  Compra inicial  "}` con stock 0 | 201, `stockAfter` 10, `reason` recortado, sin `Location`, `occurredAtUtc` con `Z`; stock en la base 10 | Sí |
+| Salida correcta | `{"type":"Exit","quantity":4}` con stock 10 | 201, `stockAfter` 6, `reason` `null`; stock en la base 6 | Sí |
+| No cambia `updatedAtUtc` | `GET /api/products/{id}` tras dos movimientos | 200, `stockQuantity` 6, `updatedAtUtc` None | Sí |
+| Token sin `inventory.write` / sin token | `POST` con token solo `read` / sin token | 403 / 401, cuerpo vacío | Sí |
+| Tipo en minúsculas y con espacios | `"type": "  entry  "` | 201, `type` `Entry` | Sí |
+| Tipo ausente | sin `type` | 400 `El tipo de movimiento es obligatorio.` | Sí |
+| Tipo desconocido | `type` 'Salida' | 400 `El tipo de movimiento debe ser 'Entry' o 'Exit'.` | Sí |
+| Tipo numérico como texto | `type` '1' | 400 `El tipo de movimiento debe ser 'Entry' o 'Exit'.` | Sí |
+| Tipo como número JSON | `"type": 1` | 400 `El cuerpo de la petición no es un JSON válido.` | Sí |
+| Cantidad ausente | `{"type":"Entry"}` | 400 `La cantidad del movimiento es obligatoria.` | Sí |
+| Cantidad cero | `{"type":"Entry","quantity":0}` | 400 `La cantidad del movimiento debe ser un entero mayor que 0.` | Sí |
+| Cantidad negativa | `{"type":"Entry","quantity":-3}` | 400 `La cantidad del movimiento debe ser un entero mayor que 0.` | Sí |
+| Cantidad decimal | `{"type":"Entry","quantity":1.5}` | 400 `El cuerpo de la petición no es un JSON válido.` | Sí |
+| Motivo solo con espacios | `"reason": "   "` | 201, `reason` `null` | Sí |
+| Motivo de 250 / 251 caracteres | `reason` de 250 / 251 | 201 / 400 `El motivo del movimiento no puede superar los 250 caracteres.` | Sí |
+| Campos fuera del contrato se ignoran | `registeredBy`, `supplierId`, `stockAfter` y `occurredAtUtc` en el cuerpo de una salida | 201; `registeredBy` es el `sub` del token, `stockAfter` real, `occurredAtUtc` de la API, `SupplierId` `NULL` en la base | Sí |
+| Autor tomado del token | `registeredBy` de la respuesta frente al claim `sub` del token | `registeredBy` igual a `sub` (`ee59fce2…`) | Sí |
+| Producto inexistente | `POST` sobre un GUID sin producto | 404 `No existe un producto activo con el id '00000000-0000-0000-0000-000000000001'.` | Sí |
+| Producto borrado | producto con stock 15 borrado (`DELETE` 204) y una entrada de 5 | 404; la base conserva `StockQuantity` 15 y 1 movimiento | Sí |
+| Salida mayor que el stock | stock 5, salida de 6 | 409 `El stock disponible del producto es insuficiente para la salida.`; stock 5, sin movimiento nuevo | Sí |
+| Salida igual al stock | stock 5, salida de 5 | 201, `stockAfter` 0 | Sí |
+| Salida sobre stock cero | stock 0, salida de 1 | 409 | Sí |
+| Entrada que desborda el stock | stock 2147483000 puesto con `sqlcmd`, entrada de 1000 | 409 `La entrada supera el stock máximo permitido para el producto.`; stock 2147483000, sin movimiento | Sí |
+| Entrada hasta el máximo | misma situación, entrada de 647 | 201, `stockAfter` 2147483647 | Sí |
+| Falla el registro del movimiento (BR-14) | `CHECK` temporal que rechaza `Reason = 'FORZAR-FALLO'`; entrada de 3 con stock 7 | 500 sin detalles internos; el `UPDATE` se deshizo: stock 7 y 1 movimiento. El `CHECK` se eliminó después | Sí |
+| `stockAfter` coincide con el stock del producto | entrada de 3 con stock 7 | `stockAfter` 10 y `stockQuantity` 10 | Sí |
+| Dos salidas simultáneas que no caben juntas (BR-15) | 5 rondas: stock 5 y dos salidas de 4 a la vez | [201, 409] stock 1; [201, 409] stock 1; [201, 409] stock 1; [201, 409] stock 1; [201, 409] stock 1; en cada ronda, un solo movimiento nuevo | Sí |
+| Orden: cuerpo inválido sobre producto inexistente | `quantity` 0 sobre un GUID sin producto | 400 | Sí |
+| Orden: salida excesiva sobre producto borrado | salida de 100 sobre el producto borrado con stock 15 | 404 | Sí |
+| Movimientos inmutables (BR-13) | `DELETE` y `PATCH` sobre `/movements`; `PUT` sobre `/movements/{id}` | `DELETE` 405, `PATCH` 405, `PUT` 404; movimientos y stock sin cambios | Sí |
+
+#### Listar
+
+| Escenario | Petición | Resultado | ¿Esperado? |
+|---|---|---|---|
+| Primera página por defecto | 25 movimientos, sin parámetros | 200, 20 elementos, `page` 1, `pageSize` 20, `totalCount` 25, `totalPages` 2 | Sí |
+| Del más reciente al más antiguo (registrados por la API) | los 20 de la primera página | fechas descendentes; el primero tiene `stockAfter` 25; `occurredAtUtc` sin `Z` en el listado | Sí |
+| La paginación no repite ni salta | `page=1` + `page=2` | 5 en la página 2, 25 ids distintos | Sí |
+| Del más reciente al más antiguo (fechas fuera de orden) | 3 filas puestas con `sqlcmd` a las 10:00, 10:05 y 10:02 | orden 10:05, 10:02, 10:00 | Sí |
+| Movimientos con la misma fecha | 3 filas con el mismo `OccurredAtUtc`, dos consultas | mismo orden que `ORDER BY Id DESC` de SQL Server, igual en las dos consultas | Sí |
+| Solo los movimientos del producto | listado de un producto con 2 movimientos | 200, `totalCount` 2, todos con su `productId` | Sí |
+| Producto activo sin movimientos | producto recién creado | 200, `items` vacío, `totalCount` 0 | Sí |
+| Token sin `inventory.read` | `GET` con token solo `write` | 403, cuerpo vacío | Sí |
+| `pageSize` igual a 101 | `?pageSize=101` | 400 `El parámetro 'pageSize' debe ser un número entero entre 1 y 100.` | Sí |
+| Producto borrado con movimientos | `GET` del producto borrado (1 movimiento) | 404 `No existe un producto activo con el id '20b6a325-7d5c-4355-a3c5-68be41231fb8'.` | Sí |
+| Producto inexistente | `GET` sobre un GUID sin producto | 404 | Sí |
+| Paginación inválida sobre producto borrado | `?page=0` sobre el producto borrado | 400 `El parámetro 'page' debe ser un número entero mayor o igual que 1.` | Sí |
+| `productId` que no es un GUID | `/api/products/abc/movements` | 404 | Sí |
+
+#### api-auth
+
+| Escenario | Petición | Resultado | ¿Esperado? |
+|---|---|---|---|
+| Token con `sub` solo con espacios | cliente temporal de Keycloak con un mapper `hardcoded-claim` que fija `sub` a `"   "` y el mapper de audiencia; `GET /api/auth/whoami` y `GET /api/categories` | `sub` del token '   '; 401 y 401, cuerpo vacío, `WWW-Authenticate: Bearer error="invalid_token"` | Sí |
+| Cliente temporal eliminado | `GET` de clientes con ese `clientId` | no queda ningún cliente de prueba en el realm | Sí |
+| Token con `sub` sigue valiendo | `GET /api/auth/whoami` con el token de `inventory-client` | 200, `clientId` `inventory-client` | Sí |
+
+### Token sin `sub`: no se puede generar con Keycloak 26
+
+- La primera ejecución dio 45 de 46. El escenario "Token sin claim `sub`" usaba un cliente temporal sin el client scope `basic` (el que tiene `oidc-sub-mapper`) y recibió 200 en `whoami`. Al decodificar el token se vio que **traía `sub`**: el fallo estaba en la prueba, no en la API. Además, el texto del resultado era fijo y decía lo contrario de lo observado. Se corrigió para que siempre muestre los valores reales.
+- Keycloak `26.8.1` emite `sub` en los tokens de las cuentas de servicio aunque el cliente no tenga ningún client scope por defecto. Se comprobó que `evaluate-scopes` solo mostraba el mapper de audiencia. Tampoco cambia nada con `client.use.lightweight.access.token.enabled`.
+- **Lo que sí se verificó en vivo:** con un mapper `oidc-hardcoded-claim-mapper` que fija `sub` a `"   "`, el token firmado por Keycloak recibe **401 con el cuerpo vacío** en `whoami` y en `categories`, con `WWW-Authenticate: Bearer error="invalid_token"`. Esto demuestra que `context.Fail(...)` en `OnTokenValidated` acaba en 401 en el pipeline real, que era lo pendiente de las tareas 1.1 y 2.2.
+- El caso "sin `sub`" usa la misma rama de código que el `sub` en blanco (`string.IsNullOrWhiteSpace` sobre `FindFirst("sub")?.Value`) y lo cubren `SubjectClaimRequirementTests.Rejects_TokenWithoutSub` y `ConfigureJwtBearerOptionsTests.Rejects_TokenWithoutSub`.
+
+- **`dotnet build` / `dotnet test`:** 0 advertencias, 0 errores; 277/277 pruebas correctas.
+- **Aprendí:** una comprobación cuyo mensaje no sale de lo observado puede contradecir su propio veredicto. Lo que deshizo la confusión fue decodificar el token en lugar de fiarme del texto. Y sobre BR-15: las 5 rondas de salidas simultáneas dieron `[201, 409]` con stock final 1, sin una sola excepción, porque el `UPDATE` condicional serializa en la fila del producto sin necesitar ningún nivel de aislamiento especial.
+
+## E5 · Movimientos de inventario — tarea 8.2 (revisión de Clean Code y cobertura)
+- **Fecha:** 10-11-2026
+- **Cambio de OpenSpec:** `add-inventory-movements`
+- **Alcance revisado:** `git diff main` y los archivos nuevos de `src` y `tests` (C# únicamente).
+- **Revisión** (subagente `code-reviewer`, con un contexto nuevo, sin el de la sesión que implementó): **rechazada** por 1 hallazgo bloqueante, con 7 menores. Confirma CQRS, la dirección de las capas, que no se usa C# 11+, que no hay secretos y que solo se hace `INSERT` en `InventoryMovements`. Tras las correcciones queda **aprobable**:
+  1. **Corregido, regla 2 (bloqueante):** `MovementRules.ValidateType` tenía una línea en blanco antes del `throw` final. La regla solo admite una antes de `return`, así que se quitó.
+  2. **Corregido, reglas 3 y 4:** `MovementWriteRepository.ApplyInTransactionAsync` se renombró a `ApplyStockDeltaAndInsertMovementAsync`, y el `INSERT` se extrajo a `InsertMovementAsync`.
+  3. **Corregido, regla 3:** las ayudas de prueba `Movement()` y `Command(...)` se renombraron a `CreateMovement()` y `CreateCommand(...)`.
+  4. **Aceptado, regla 7 en ayudas de prueba:** ver `docs/assumptions.md`.
+  5. **Corregido, consistencia:** `MovementsControllerTests` usa `SubjectClaimRequirement.ClaimType` en vez del literal `"sub"`.
+  6. **Corregido, consistencia:** `ExceptionHandlingMiddlewareTests` usa `MovementMessages.InsufficientStock` en vez de un texto que no era el mensaje real.
+  7. **Corregido, legibilidad:** `MovementRules.ValidateRegisteredBy` guarda el autor en una variable local y ya no necesita el operador `!`.
+  8. **Corregido en parte y aceptado como deuda:** se eliminó la prueba `BR15_...` del handler, porque duplicaba la de BR-12 con un nombre engañoso. Los escenarios que dependen de SQL Server siguen sin prueba automática (ver `docs/assumptions.md`).
+- **Verificación tras las correcciones:** `docker compose up -d --build --no-deps api` y se repitió el recorrido completo de la tarea 8.1 (sufijo `9602`): **46/46** escenarios con el resultado esperado, incluidas las 5 rondas de BR-15 y el fallo forzado del `INSERT`.
+- **`dotnet build` / `dotnet test`:** 0 advertencias, 0 errores; 276/276 pruebas correctas (una menos que en la tarea 8.1, por la prueba BR-15 eliminada).
+- **Cobertura con Coverlet** (`dotnet test --collect:"XPlat Code Coverage"`, formato Cobertura):
+
+  | Ensamblado | Líneas | Ramas |
+  |---|---|---|
+  | `Inventory.Domain` | 100,0 % | 97,7 % |
+  | `Inventory.Application` | 99,7 % | 95,3 % |
+  | `Inventory.Api` | 74,6 % | 84,5 % |
+  | `Inventory.Infrastructure` | 5,5 % | 8,3 % |
+  | **Total** | **65,0 % (871/1341)** | **71,0 %** |
+
+  Las clases nuevas de Domain, Application y Api están al 100 %, salvo dos:
+  - `RegisterMovementHandler`: la rama sin cubrir es el `_ => throw InvalidOperationException` de un estado que no existe.
+  - `MovementsServiceCollectionExtensions`: solo se ejecuta al arrancar la API.
+
+  `MovementWriteRepository` y `MovementReadRepository` están al 0 %, como los repositorios de los cambios anteriores.
+- **Aprendí:** el único hallazgo bloqueante fue una línea en blanco que yo había leído como "antes de salir del método". La regla dice `return`, no "salida", y el revisor tenía razón al aplicarla al pie de la letra. El hallazgo más útil, sin embargo, fue el de la prueba BR-15: pasaba, pero su nombre afirmaba algo que no comprobaba.

@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Inventory.Api.Middleware;
+using Inventory.Application.Movements;
 using Inventory.Domain.Exceptions;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -14,7 +15,8 @@ public class ExceptionHandlingMiddlewareTests
     {
         { new ValidationException("El nombre de la categoría es obligatorio."), StatusCodes.Status400BadRequest, "La petición no es válida." },
         { new NotFoundException("No existe una categoría activa con el id indicado."), StatusCodes.Status404NotFound, "Recurso no encontrado." },
-        { new ConflictException("Ya existe una categoría con el nombre 'Tornillería'."), StatusCodes.Status409Conflict, "Conflicto con el estado actual del recurso." }
+        { new ConflictException("Ya existe una categoría con el nombre 'Tornillería'."), StatusCodes.Status409Conflict, "Conflicto con el estado actual del recurso." },
+        { new InsufficientStockException(MovementMessages.InsufficientStock), StatusCodes.Status409Conflict, "Conflicto con el estado actual del recurso." }
     };
 
     [Theory]

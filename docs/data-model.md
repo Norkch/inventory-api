@@ -1,6 +1,6 @@
 # Modelo de datos
 
-Última actualización: 2026-11-09 · Motor: SQL Server 2022 (Docker) · Base: `InventoryDb`
+Última actualización: 2026-11-10 · Motor: SQL Server 2022 (Docker) · Base: `InventoryDb`
 
 ## Principios
 - **Sin llaves foráneas** La integridad referencial se garantiza en la aplicación, y cada comprobación tiene su prueba.
@@ -37,7 +37,12 @@ Eliminar una categoría es lógico (`IsActive = 0`, BR-05). El nombre de una cat
 | CreatedAtUtc | DATETIME2 | No | Por defecto: fecha actual UTC |
 | UpdatedAtUtc | DATETIME2 | Sí | Lo fija la aplicación al editar y al borrar |
 
-`StockQuantity` es un saldo derivado: solo cambia con movimientos.
+`StockQuantity` es un saldo derivado: solo cambia con movimientos. Cada movimiento lo cambia en una sola transacción con dos sentencias (ver D3 del diseño del cambio `add-inventory-movements`):
+
+1. Un `UPDATE` condicional atómico: `SET StockQuantity = StockQuantity + @Delta OUTPUT INSERTED.StockQuantity WHERE Id = @ProductId AND IsActive = 1 AND StockQuantity >= -@Delta`. `@Delta` es `+quantity` en una entrada y `-quantity` en una salida. Si no afecta a ninguna fila, el producto no está activo (404) o el stock no alcanza (409). El bloqueo de la fila serializa las salidas simultáneas (BR-15), y `CK_Products_StockQuantity` queda como última barrera.
+2. El `INSERT` del movimiento en `InventoryMovements`, con `StockAfter` igual al valor que devolvió el `OUTPUT`.
+
+Si cualquiera de las dos falla, la transacción se deshace (BR-14). Una entrada que superaría `2147483647` provoca el error 8115 de SQL Server, y la API responde 409. Registrar un movimiento no cambia `UpdatedAtUtc`.
 
 Eliminar un producto es lógico (`IsActive = 0`, BR-06) y conserva su stock y sus movimientos. A diferencia del nombre de una categoría, el SKU de un producto borrado **no** se puede reutilizar: `UX_Products_Sku` no tiene filtro.
 
@@ -54,7 +59,9 @@ Eliminar un producto es lógico (`IsActive = 0`, BR-06) y conserva su stock y su
 | OccurredAtUtc | DATETIME2 | No | |
 | RegisteredBy | NVARCHAR(100) | No | Cliente OAuth2 (claim `sub`) |
 
-Tabla inmutable: no hay actualización ni eliminación.
+Tabla inmutable: no hay actualización ni eliminación. Cada fila se inserta en la misma transacción que el `UPDATE` de `Products.StockQuantity` (ver la sección de `Products`), así que `StockAfter` coincide siempre con el stock del producto justo después de aplicar ese movimiento.
+
+`SupplierId` queda siempre `NULL` hasta que se implemente BR-16 (proveedor en las entradas). La API ignora un `supplierId` en el cuerpo de la petición.
 
 ### Suppliers
 | Columna | Tipo | Null | Restricción |

@@ -10,6 +10,7 @@ builder.Services.AddValidatedDatabaseOptions(builder.Configuration);
 builder.Services.AddPersistence();
 builder.Services.AddCategories();
 builder.Services.AddProducts();
+builder.Services.AddMovements();
 builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme).AddJwtBearer();
 builder.Services.ConfigureOptions<ConfigureJwtBearerOptions>();
 builder.Services.AddAuthorization(options => options.AddScopePolicies());
