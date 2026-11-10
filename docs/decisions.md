@@ -97,3 +97,67 @@ Los detalles están en `openspec/changes/add-categories/design.md`, decisiones D
 - **Nombre reutilizable:** al desactivar una categoría, su nombre queda libre. Se puede crear otra con el mismo nombre y un `id` distinto, así que puede haber varias filas con el mismo nombre (una activa como mucho).
 - **Filtro en todas las lecturas:** cada consulta de categorías tiene que filtrar `IsActive = 1`, y el alta de productos (BR-03) tiene que comprobar que la categoría existe **y está activa**.
 - **Migración:** `Categories` gana la columna `IsActive`, y `db/init.sql` la añade también a las bases que ya existían (`design.md`, D11).
+
+## DEC-003 · SKU reservado para siempre
+
+- **Fecha:** 2026-11-10
+- **Estado:** Aceptada
+- **Cambio de OpenSpec:** `add-products`
+
+### Contexto
+
+BR-01 pide un SKU único sin distinguir mayúsculas, y BR-06 hace que borrar un producto sea lógico: la fila y sus movimientos se conservan. Para las categorías se eligió lo contrario (DEC-002): su nombre queda libre al desactivarlas. Hacía falta decidir qué pasa con el SKU de un producto borrado.
+
+### Decisión
+
+El SKU es único entre **todos** los productos, activos o borrados. El SKU de un producto borrado no se puede reutilizar: crear otro con ese SKU responde 409, con el mismo mensaje que para un producto activo.
+
+- `UX_Products_Sku` se mantiene **sin filtro**.
+- `Products.Sku` declara la collation `SQL_Latin1_General_CP1_CI_AS`, para que "sin distinguir mayúsculas" no dependa de la instancia. `db/init.sql` la aplica también a las bases existentes (`design.md`, D7).
+
+### Alternativas consideradas
+
+| Alternativa | Por qué se descartó |
+|---|---|
+| **Índice filtrado `WHERE IsActive = 1`**, como el nombre de las categorías | Los movimientos del producto borrado siguen existiendo y el SKU es lo que lo identifica fuera del sistema. Dos productos con el mismo SKU, uno borrado y otro activo, harían ambiguo el historial. |
+| **Comparar con `UPPER()` en la aplicación**, sin collation explícita | El índice único no protegería contra dos altas simultáneas con distintas mayúsculas si la instancia distinguiera mayúsculas. |
+
+### Consecuencias
+
+**Positivas**
+- Un SKU identifica a un único producto durante toda la vida del inventario, también en el historial de movimientos.
+- El índice único resuelve las altas simultáneas sin lógica adicional.
+
+**Negativas y riesgos**
+- Un SKU mal escrito y borrado queda inutilizable. Como no se puede reactivar un producto ni cambiar su SKU, la única salida es usar otro SKU.
+- Si un volumen antiguo tuviera dos SKU que solo difieren en mayúsculas, la migración de la collation fallaría al recrear el índice. Hasta este cambio no había endpoint de productos, así que solo puede pasar con datos puestos a mano.
+
+## DEC-004 · Borrado de productos con stock
+
+- **Fecha:** 2026-11-10
+- **Estado:** Aceptada
+- **Cambio de OpenSpec:** `add-products`
+
+### Contexto
+
+BR-06 hace que borrar un producto sea lógico y conserve sus movimientos, pero no dice si se puede borrar un producto que todavía tiene existencias. Por BR-11, no se pueden registrar movimientos sobre un producto inactivo.
+
+### Decisión
+
+Se puede borrar un producto aunque tenga stock. `DELETE /api/products/{id}` responde 204 y el stock **queda congelado**: la fila conserva `StockQuantity` y sus movimientos, pero el producto ya no se puede consultar ni mover por la API.
+
+### Alternativas consideradas
+
+| Alternativa | Por qué se descartó |
+|---|---|
+| **Exigir stock 0 para borrar (409)** | Sería una regla nueva que BR-06 no pide, y obligaría a registrar una salida ficticia antes de retirar un producto del catálogo. |
+
+### Consecuencias
+
+**Positivas**
+- Retirar un producto del catálogo no depende de su stock.
+- El libro de movimientos sigue cuadrando con el `StockQuantity` guardado.
+
+**Negativas y riesgos**
+- El stock de un producto borrado no aparece en ningún endpoint. Si un informe futuro necesita el valor del inventario retirado, tendrá que leer los productos inactivos.
+- Como no hay reactivación, las existencias de un producto borrado por error no se pueden volver a mover.

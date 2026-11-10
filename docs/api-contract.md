@@ -161,6 +161,16 @@ Los errores 400, 404, 409 y 500 se responden con `Content-Type: application/prob
 }
 ```
 
+El texto depende del tipo del parámetro (`add-products`, D8):
+
+| Tipo del parámetro | `detail` | Ejemplo |
+|---|---|---|
+| Entero | `El parámetro '{nombre}' debe ser un número entero.` | `?pageSize=diez` |
+| GUID | `El parámetro '{nombre}' debe ser un identificador (GUID) válido.` | `GET /api/products?categoryId=abc` |
+| Otro | `El parámetro '{nombre}' no tiene un formato válido.` | |
+
+Un campo con tipo incorrecto **dentro del cuerpo** (por ejemplo `"categoryId": "abc"` en `POST /api/products`) da siempre `El cuerpo de la petición no es un JSON válido.`
+
 Los mensajes de formato del framework (en inglés) no llegan nunca al cliente.
 
 #### 404: recurso inexistente
@@ -391,3 +401,177 @@ La comprobación de productos activos y la desactivación se hacen en una sola s
 ### Id que no es un GUID
 
 `GET /api/categories/{id}` y `DELETE /api/categories/{id}` solo coinciden con un `id` con formato de GUID (ruta `{id:guid}`). Con cualquier otro valor, por ejemplo `GET /api/categories/abc`, ninguna ruta coincide y la respuesta es **404 con el cuerpo vacío**, sin ProblemDetails. Los 404 con mensaje solo se dan con un GUID válido que no corresponde a ninguna categoría activa.
+
+## Productos (`add-products`)
+
+Los productos pertenecen a una categoría activa y llevan su stock. El stock solo se lee: lo cambiarán los movimientos de inventario, que no son parte de este cambio.
+
+### Endpoints
+
+| Método y ruta | Scope exigido | Éxito | Errores con ProblemDetails | Sin token o token inválido | Token sin el scope |
+|---|---|---|---|---|---|
+| `POST /api/products` | `inventory.write` | 201 | 400, 409 | 401 | 403 |
+| `GET /api/products?page&pageSize&categoryId&search` | `inventory.read` | 200 | 400 | 401 | 403 |
+| `GET /api/products/{id}` | `inventory.read` | 200 | 404 | 401 | 403 |
+| `PUT /api/products/{id}` | `inventory.write` | 200 | 400, 404 | 401 | 403 |
+| `DELETE /api/products/{id}` | `inventory.write` | 204 | 404 | 401 | 403 |
+
+- 401 y 403 llegan con el cuerpo vacío, igual que en categorías.
+- `{id}` solo coincide con un GUID (`{id:guid}`). Cualquier otro valor responde 404 con el cuerpo vacío.
+
+### Representación de un producto
+
+La misma en todas las respuestas (201, 200 del `PUT`, `GET` por id y cada elemento del listado):
+
+```json
+{
+  "id": "6a1f0c3e-8d2b-4f7a-9e15-2c4b7d9e0f31",
+  "sku": "TOR-001",
+  "name": "Tornillo 3/8",
+  "description": "Acero inoxidable",
+  "categoryId": "3f2504e0-4f89-11d3-9a0c-0305e82c3301",
+  "categoryName": "Tornillería",
+  "stockQuantity": 0,
+  "createdAtUtc": "2026-11-10T09:30:00.1234567Z",
+  "updatedAtUtc": null
+}
+```
+
+| Campo | Tipo | Contenido |
+|---|---|---|
+| `id` | GUID | Lo genera la API al crear el producto |
+| `sku` | string | SKU recortado, de 1 a 50 caracteres. No cambia nunca |
+| `name` | string | Nombre recortado, de 1 a 200 caracteres |
+| `description` | string o `null` | Descripción recortada, de 1 a 1000 caracteres, o `null` |
+| `categoryId` | GUID | Categoría activa a la que pertenece |
+| `categoryName` | string | Nombre de esa categoría |
+| `stockQuantity` | entero | Stock actual. Empieza en 0 y solo lo cambian los movimientos (BR-07) |
+| `createdAtUtc` | fecha y hora ISO 8601 | Momento del alta, en UTC |
+| `updatedAtUtc` | fecha y hora ISO 8601 o `null` | Última edición, en UTC; `null` si nunca se ha editado |
+
+Como en categorías, las respuestas solo devuelven productos activos y no incluyen `isActive`. La respuesta 201 escribe `createdAtUtc` con el sufijo `Z`; las lecturas y la respuesta del `PUT` escriben las fechas sin sufijo, porque salen de columnas `datetime2` (ver `docs/assumptions.md`).
+
+### `POST /api/products`
+
+Crea un producto activo con stock 0. Cuerpo de la petición:
+
+```json
+{
+  "sku": "TOR-001",
+  "name": "Tornillo 3/8",
+  "description": "Acero inoxidable",
+  "categoryId": "3f2504e0-4f89-11d3-9a0c-0305e82c3301"
+}
+```
+
+| Campo | Obligatorio | Reglas |
+|---|---|---|
+| `sku` | Sí | BR-01. Se recorta; no puede quedar vacío ni superar los 50 caracteres. Único entre **todos** los productos, también los borrados, sin distinguir mayúsculas |
+| `name` | Sí | BR-02. Se recorta; no puede quedar vacío ni superar los 200 caracteres. No tiene que ser único |
+| `description` | No | Se recorta. Vacía o solo con espacios se guarda como `null`. Máximo 1000 caracteres |
+| `categoryId` | Sí | BR-03. Debe ser una categoría activa |
+| `stockQuantity` | No aplica | No forma parte del contrato. Si se envía, se ignora y el producto empieza con 0 (BR-07) |
+
+Respuesta 201 con el producto (ver la [representación](#representación-de-un-producto)) y la cabecera `Location: /api/products/{id}`.
+
+| Cuerpo enviado | Respuesta |
+|---|---|
+| Producto válido | 201 con `stockQuantity` 0 y `updatedAtUtc` `null` |
+| Producto válido con `"stockQuantity": 50` | 201 con `stockQuantity` 0 |
+| `"sku": "  TOR-001  "` | 201 con `"sku": "TOR-001"` |
+| Sin `sku`, o `"sku": "   "` | 400: `El SKU del producto es obligatorio.` |
+| SKU de 51 caracteres después de recortarlo | 400: `El SKU del producto no puede superar los 50 caracteres.` |
+| Sin `name`, o vacío | 400: `El nombre del producto es obligatorio.` |
+| Nombre de 201 caracteres | 400: `El nombre del producto no puede superar los 200 caracteres.` |
+| Descripción de 1001 caracteres | 400: `La descripción del producto no puede superar los 1000 caracteres.` |
+| Sin `categoryId` | 400: `La categoría del producto es obligatoria.` |
+| `categoryId` inexistente o de una categoría desactivada | 400: `La categoría indicada no existe o no está activa.` |
+| `"categoryId": "abc"` | 400: `El cuerpo de la petición no es un JSON válido.` |
+| SKU de otro producto, activo o borrado | 409: `Ya existe un producto con el SKU 'TOR-001'.` |
+
+#### Orden de los errores
+
+Si un alta incumple varias reglas, se responde solo el primer error en este orden:
+
+1. Formato de `sku`, `name`, `description` y `categoryId` ausente (400).
+2. Categoría inexistente o desactivada (400).
+3. SKU repetido (409).
+
+Por ejemplo, un SKU repetido con una categoría inexistente responde 400 por la categoría.
+
+#### SKU reservado para siempre (BR-01)
+
+- El SKU se compara después de recortarlo y sin distinguir mayúsculas: `"tor-001"` y `" TOR-001 "` chocan con `"TOR-001"`.
+- Un SKU **no se libera** al borrar el producto. Crear otro producto con el SKU de uno borrado responde 409 con el mismo mensaje, que no dice si el otro está borrado.
+- Si dos peticiones crean a la vez un producto con el mismo SKU, una responde 201 y la otra 409. Lo garantiza el índice único `UX_Products_Sku`, sin filtro.
+
+#### Categoría activa también frente a la concurrencia (BR-03)
+
+El alta comprueba la categoría en la misma sentencia que inserta el producto, bloqueando la fila de la categoría. Si a la vez se desactiva esa categoría, o el alta responde 201 y la desactivación 409, o la desactivación responde 204 y el alta 400. Nunca queda un producto activo en una categoría desactivada.
+
+### `GET /api/products`
+
+Lista los productos activos, paginados (BR-18) y ordenados por `name` y, a igualdad, por `id`.
+
+| Parámetro de consulta | Tipo | Por defecto | Reglas |
+|---|---|---|---|
+| `page` | entero | 1 | Desde 1 |
+| `pageSize` | entero | 20 | De 1 a 100 |
+| `categoryId` | GUID | Ninguno | Solo los productos de esa categoría. Una categoría inexistente o desactivada da 200 con `items` vacío |
+| `search` | texto | Ninguno | Productos cuyo `name` o `sku` **contiene** el texto, sin distinguir mayúsculas. Se recorta; vacío o solo con espacios es como no enviarlo |
+
+La respuesta tiene la misma forma que el listado de categorías (`{ items, page, pageSize, totalCount, totalPages }`), y cada elemento de `items` es un producto completo. `totalCount` cuenta los productos activos que cumplen los filtros.
+
+- **Búsqueda literal:** `%`, `_` y `[` se buscan como texto. `search=50%` encuentra `"Descuento 50%"` y no `"Caja 500"`.
+- **Búsqueda en el SKU:** `search=r-00` encuentra el producto con SKU `"TOR-001"` aunque su nombre no lo contenga.
+- **Combinación:** `categoryId` y `search` se aplican a la vez.
+- **Borrados:** no aparecen ni cuentan en `totalCount`.
+
+Parámetros inválidos (400): `page` y `pageSize` como en categorías, y `?categoryId=abc` con `El parámetro 'categoryId' debe ser un identificador (GUID) válido.`
+
+### `GET /api/products/{id}`
+
+Responde 200 con el producto activo. Un GUID que no corresponde a ningún producto activo, incluido uno borrado, responde 404 con `No existe un producto activo con el id '{id}'.`
+
+### `PUT /api/products/{id}`
+
+Reemplaza los campos editables de un producto activo y responde 200 con el producto actualizado. Cuerpo:
+
+```json
+{
+  "name": "Tornillo 1/2",
+  "description": null,
+  "categoryId": "9b2e5d10-7c4a-4e3b-8f61-0d5a2c7e9b44"
+}
+```
+
+- `name`, `description` y `categoryId` siguen las mismas reglas que en el alta.
+- Es un reemplazo completo: un `description` ausente o `null` deja la descripción en `null`.
+- **`sku` y `stockQuantity` se ignoran** si vienen en el cuerpo: el SKU y el stock no cambian nunca con un `PUT` (BR-01, BR-07).
+- La respuesta trae `updatedAtUtc` con el momento de la edición. `sku`, `stockQuantity` y `createdAtUtc` no cambian.
+- La nueva categoría se comprueba en la misma sentencia que actualiza el producto, igual que en el alta.
+
+| Situación | Respuesta |
+|---|---|
+| Producto activo y datos válidos | 200 con el producto actualizado |
+| Cuerpo con `"sku": "OTRO-001"` o `"stockQuantity": 99` | 200; `sku` y `stockQuantity` no cambian |
+| `name` vacío u otra regla de formato | 400 con el mensaje de la regla; el producto no cambia |
+| Producto inexistente o borrado | 404: `No existe un producto activo con el id '{id}'.` |
+| Producto activo y categoría inexistente o desactivada | 400: `La categoría indicada no existe o no está activa.` |
+
+Si el producto no existe **y** la categoría tampoco, gana el 404 (ver `docs/assumptions.md`).
+
+### `DELETE /api/products/{id}`
+
+Borrado lógico (BR-06): el producto pasa a inactivo y la fila se conserva.
+
+| Situación | Respuesta |
+|---|---|
+| Producto activo, con o sin stock | 204, sin cuerpo |
+| Producto que ya estaba borrado | 404 |
+| GUID que no corresponde a ningún producto | 404 |
+
+- **El stock queda congelado:** un producto borrado con `stockQuantity` 15 conserva ese valor en la base, pero ya no se puede consultar por la API.
+- **Los movimientos se conservan:** el borrado no toca el libro de movimientos.
+- **El SKU no se libera** (ver arriba).
+- Borrar el único producto activo de una categoría permite desactivar después esa categoría (BR-05).
