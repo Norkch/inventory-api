@@ -1,4 +1,3 @@
-using Inventory.Api.Authorization;
 using Inventory.Api.Contracts;
 using Inventory.Application.Security;
 using Microsoft.AspNetCore.Authorization;
@@ -21,19 +20,5 @@ public sealed class AuthController : ControllerBase
         var scopeSet = new ScopeSet(User.FindFirst(ScopeClaimType)?.Value);
 
         return Ok(new WhoAmIResponse(clientId, scopeSet.Scopes));
-    }
-
-    [HttpGet("check-read")]
-    [Authorize(Policy = ScopePolicies.InventoryRead)]
-    public ActionResult<AccessCheckResponse> CheckRead()
-    {
-        return Ok(new AccessCheckResponse("Permiso de lectura concedido: el token tiene el scope inventory.read."));
-    }
-
-    [HttpGet("check-write")]
-    [Authorize(Policy = ScopePolicies.InventoryWrite)]
-    public ActionResult<AccessCheckResponse> CheckWrite()
-    {
-        return Ok(new AccessCheckResponse("Permiso de escritura concedido: el token tiene el scope inventory.write."));
     }
 }

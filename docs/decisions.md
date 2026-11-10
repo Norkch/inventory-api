@@ -52,3 +52,48 @@ Los detalles (hostname, audiencia, scopes opcionales, 401 y 403 con el cuerpo va
 - **Sin persistencia:** Keycloak no tiene volumen de datos. Los cambios hechos a mano en su consola se pierden al recrear el contenedor; la fuente de verdad es el JSON del realm.
 - **Cambio de configuración (rompe compatibilidad):** desaparecen `Auth__SigningKey`, `Auth__ClientId`, `Auth__ClientSecret`, `Auth__TokenLifetimeMinutes`, `AUTH_SIGNING_KEY`, `AUTH_CLIENT_ID` y `AUTH_CLIENT_SECRET`. Aparecen `Auth__MetadataAddress`, `Auth__Issuer`, `Auth__Audience`, `Auth__SwaggerClientId`, `KC_BOOTSTRAP_ADMIN_USERNAME`, `KC_BOOTSTRAP_ADMIN_PASSWORD`, `INVENTORY_CLIENT_ID` (opcional, por defecto `inventory-client`), `INVENTORY_API_AUDIENCE` (opcional, por defecto `inventory-api`) e `INVENTORY_CLIENT_SECRET`. Cada desarrollador tiene que recrear su `.env` desde `.env.example`.
 - **Solo desarrollo:** el modo de desarrollo de Keycloak, sin HTTPS, no sirve para producción. Producción está fuera del alcance de este cambio.
+
+## DEC-002 · Borrado lógico de categorías
+
+- **Fecha:** 2026-11-09
+- **Estado:** Aceptada
+- **Cambio de OpenSpec:** `add-categories`
+- **Sustituye a:** la redacción anterior de BR-05 en `docs/business-rules.md` ("No se puede eliminar una categoría con productos activos ni inactivos")
+
+### Contexto
+
+`DELETE /api/categories/{id}` tiene que retirar una categoría que ya no se usa. Los productos (BR-03) apuntan a su categoría por `CategoryId`, y un producto eliminado no se borra: queda inactivo (BR-06) y conserva sus movimientos. La base no tiene llaves foráneas, así que la integridad entre productos y categorías la garantiza la aplicación.
+
+Si una categoría se borrara de verdad, los productos inactivos que la usan quedarían apuntando a una fila que no existe. Si, para evitarlo, cualquier producto bloqueara el borrado, una categoría con un solo producto retirado no se podría eliminar nunca, porque los productos tampoco se borran.
+
+### Decisión
+
+Eliminar una categoría es un **borrado lógico**: `IsActive` pasa a `false` y la fila se conserva.
+
+- Solo se permite si la categoría no tiene **productos activos**. Los productos inactivos no lo impiden.
+- La comprobación y la desactivación van en una sola sentencia `UPDATE ... WHERE Id = @Id AND IsActive = 1 AND NOT EXISTS (productos activos)`, para que no se pueda crear un producto activo entre los dos pasos (`design.md`, D4).
+- `DELETE` responde 204 si la desactiva, 404 si no existe o ya estaba desactivada, y 409 con un mensaje en español si tiene productos activos.
+- Una categoría desactivada no aparece en `GET /api/categories`, y `GET /api/categories/{id}` responde 404.
+- No hay endpoint para reactivarla.
+
+Los detalles están en `openspec/changes/add-categories/design.md`, decisiones D3 y D4.
+
+### Alternativas consideradas
+
+| Alternativa | Por qué se descartó |
+|---|---|
+| **Borrado físico** (`DELETE` de la fila) | Los productos inactivos, que se conservan con sus movimientos, quedarían apuntando a una categoría que no existe. Sin llaves foráneas, nada en la base lo impediría. Además, se perdería el historial de qué categoría tenía cada producto. |
+| **Bloquear el borrado con cualquier producto, activo o inactivo** (la redacción anterior de BR-05) | Como los productos tampoco se borran, una categoría que haya tenido un solo producto no se podría eliminar nunca. |
+
+### Consecuencias
+
+**Positivas**
+- Ningún producto apunta a una categoría que no existe, aunque no haya llaves foráneas.
+- Se conserva el historial: un producto inactivo sigue sabiendo a qué categoría pertenecía.
+- El borrado es atómico y no compite con el alta de productos.
+
+**Negativas y riesgos**
+- **Índice filtrado:** el nombre debe ser único solo entre las categorías activas, así que `UX_Categories_Name` pasa a ser un índice filtrado (`WHERE IsActive = 1`). Los índices filtrados exigen `QUOTED_IDENTIFIER ON` en las sesiones que modifican la tabla (ver `docs/data-model.md`).
+- **Nombre reutilizable:** al desactivar una categoría, su nombre queda libre. Se puede crear otra con el mismo nombre y un `id` distinto, así que puede haber varias filas con el mismo nombre (una activa como mucho).
+- **Filtro en todas las lecturas:** cada consulta de categorías tiene que filtrar `IsActive = 1`, y el alta de productos (BR-03) tiene que comprobar que la categoría existe **y está activa**.
+- **Migración:** `Categories` gana la columna `IsActive`, y `db/init.sql` la añade también a las bases que ya existían (`design.md`, D11).

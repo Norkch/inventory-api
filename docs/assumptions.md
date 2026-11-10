@@ -68,3 +68,57 @@ La revisión de Clean Code de la tarea 8.2 dejó tres hallazgos menores. Se acep
 - **`"scope"` y `"azp"` repetidos en `ScopePolicies` y `AuthController`.**
   - No es una de las siete reglas. Son dos constantes privadas, cada una en la clase que la usa.
   - Se moverán a una clase `TokenClaimTypes` cuando un tercer consumidor las necesite, por ejemplo los controladores del entregable 3.
+
+## add-categories (2026-11-09)
+
+### `Category.Create` recibe el nombre, la descripción y la fecha por separado
+
+- La regla 7 pide pasar objetos en lugar de propiedades sueltas. `Category.Create(string? name, string? description, DateTime createdAtUtc)` recibe tres valores porque son los datos con los que nace la entidad, y Domain no puede conocer `CreateCategoryCommand` (las dependencias apuntan hacia adentro).
+- No se crea un objeto intermedio en Domain solo para agrupar esos tres valores. Si el revisor de Clean Code lo marca, se reconsiderará en la tarea 4.2, que es la que llama a `Create`.
+- `PageRequest.Create(int? page, int? pageSize)` (tarea 3.1) también recibe dos valores sueltos, pero por otro motivo: `PageRequest` vive en `Application/Common` y es genérico, así que no debe depender de `ListCategoriesQuery` ni de ninguna consulta concreta. Los productos, los proveedores y los movimientos lo reutilizarán con sus propias consultas. Lo llama `ListCategoriesHandler` (tarea 4.5). Redacción corregida tras la segunda revisión de Clean Code de la tarea 10.2.
+
+### Tratamiento de la descripción de una categoría
+
+- `specs/categories` exige que una descripción vacía o solo con espacios se guarde como `null` y que se recorte antes de comprobar el máximo de 500 caracteres.
+- Se asume que una descripción de exactamente 500 caracteres es válida (el límite incluido), igual que los 100 del nombre.
+- No se envía `description`, se envía `null` o se envía vacía o solo con espacios: en los cuatro casos se guarda y se devuelve `null`. La API no distingue entre "sin descripción" y "descripción vacía".
+- La descripción no tiene que ser única ni se valida su contenido, solo su longitud después de recortarla.
+- El recorte solo quita los espacios de los extremos (`string.Trim()`); los espacios intermedios se conservan tal cual. Lo mismo se aplica al nombre.
+- Documentado en `docs/api-contract.md`, sección "Categorías" (tarea 8.3).
+
+### Id que no es un GUID: 404 sin cuerpo (D10)
+
+- `GET` y `DELETE` usan la ruta `api/categories/{id:guid}`. Un id que no tiene formato de GUID (por ejemplo `abc`) no coincide con ninguna ruta, y ASP.NET Core responde 404 con el cuerpo vacío, sin ProblemDetails ni mensaje en español.
+- Se acepta porque el recurso no existe y no hace falta un mensaje. No se responde 400: el id no es un parámetro mal escrito de un recurso que existe, sino una ruta que no existe.
+- Los escenarios de `specs/categories` con un 404 con mensaje en español usan siempre un GUID válido que no corresponde a ninguna categoría activa.
+- Documentado en `docs/api-contract.md`, sección "Id que no es un GUID" (tarea 8.3).
+
+### `createdAtUtc` sin sufijo `Z` en las lecturas
+
+- Observado al documentar la tarea 8.3, sin cambiar el código. La respuesta 201 serializa `createdAtUtc` desde `DateTime.UtcNow` (`DateTimeKind.Utc`), con el sufijo `Z`. Las lecturas con EF Core devuelven la columna `datetime2` como `DateTimeKind.Unspecified`, y `System.Text.Json` la escribe sin sufijo.
+- El valor es UTC en los dos casos, como exige `specs/categories`; solo cambia el formato.
+- Queda pendiente de decidir si se unifica (por ejemplo, con un `ValueConverter` en `InventoryReadDbContext` que marque las fechas como UTC). Se comprobará en la tarea 10.1.
+- Confirmado en la tarea 10.1: `POST` devuelve `"createdAtUtc":"2026-11-10T03:59:15.0566126Z"` y el `GET` de la misma categoría, `"createdAtUtc":"2026-11-10T03:59:15.0566126"`.
+
+### JwtBearer acepta también el emisor de la metadata, no solo `Auth__Issuer`
+
+- Hallazgo de la tarea 10.1. Con `api` recreada con `Auth__Issuer=http://otro-emisor:8081/realms/inventory`, un token con `iss=http://localhost:8081/realms/inventory` respondió 200, no 401. El handler de JwtBearer acepta, además de `ValidIssuer`, el `issuer` del documento de metadata (`Auth__MetadataAddress`).
+- Context7 solo tiene la documentación de ASP.NET Core 7 en adelante y de la rama `main` (otras versiones mayores), así que no pudo confirmar el comportamiento de la 6. El comportamiento se comprobó en vivo.
+- **Se acepta por ahora:** la metadata sale del mismo realm `inventory`, así que en el despliegue actual los dos valores coinciden (`http://localhost:8081/realms/inventory`). Un token de otro emisor real se rechaza: un token del realm `master` respondió 401 con `The issuer 'http://localhost:8081/realms/master' is invalid`.
+- **Consecuencia:** `docs/api-contract.md` dice "`iss` es igual a `Auth__Issuer`", y eso solo se cumple mientras `Auth__Issuer` y el emisor de la metadata coincidan. Si se configura mal `Auth__Issuer`, nada lo avisa.
+- **Pendiente:** corregirlo en un cambio aparte (por ejemplo `fix-strict-issuer-validation`), con un validador de emisor que solo acepte `Auth__Issuer` y su prueba primero. Pertenece a `api-auth` (`add-keycloak-oauth`), no a `add-categories`.
+
+### APIs de EF Core 6 y Dapper 2.1 confirmadas para la persistencia (tarea 6.1)
+
+- **Aviso sobre la versión de EF Core:** Context7 (`/dotnet/entityframework.docs`) no separa la documentación por versión y sirve la rama `main`, que corresponde a una versión mayor posterior a la 6. Se ignoró todo lo que es propio de versiones posteriores (por ejemplo, `UseSqlServer(null)` de EF7 y los ejemplos de EF9). Cada API que se usará se comprobó además en los archivos XML de los paquetes `6.0.36` de la caché de NuGet (`microsoft.entityframeworkcore`, `.relational` y `.sqlserver`, `lib/net6.0`).
+- **EF Core 6.0.36 (confirmadas en la documentación y en el paquete):**
+  - `services.AddDbContext<TContext>((IServiceProvider sp, DbContextOptionsBuilder options) => ...)`: permite leer `IOptions<DatabaseOptions>` desde `sp` al configurar el contexto (D9).
+  - `options.UseSqlServer(string connectionString)`.
+  - `options.UseQueryTrackingBehavior(QueryTrackingBehavior.NoTracking)`: todas las consultas del contexto van sin seguimiento por defecto (D5).
+  - `queryable.AsNoTracking()`, que se llama además de forma explícita en cada consulta (D5).
+  - `CountAsync(CancellationToken)`, `Skip`, `Take` y `ToListAsync` para la paginación.
+  - `modelBuilder.Entity<CategoryRecord>().ToTable("Categories", "dbo")` y `HasKey(...)` en `OnModelCreating`, para mapear `CategoryRecord` a la tabla que crea `init.sql` sin migraciones.
+- **Dapper:** Context7 tiene la documentación de `2.1.66` (`/dapperlib/dapper/2.1.66`), que es de la misma versión mayor y menor que el paquete `2.1.89` del proyecto. El paquete `2.1.89` no trae `lib/net6.0`, así que en net6.0 se usa `netstandard2.0`. Se confirmaron:
+  - `ExecuteAsync` (devuelve las filas afectadas, que es lo que usa el borrado lógico atómico de D4), `ExecuteScalarAsync<T>` y `QueryFirstOrDefaultAsync<T>`, con sobrecargas `(string sql, object? param, ...)` y `(CommandDefinition)`.
+  - `CommandDefinition(sql, parameters, ..., cancellationToken: ...)`, para pasar el `CancellationToken`.
+  - `DbString { Value, Length, IsAnsi = false, IsFixedLength = false }` para los parámetros `nvarchar` con su longitud (100 para `Name` y 500 para `Description`), como pide la tarea 6.3. Otra opción es `DynamicParameters.Add(name, value, DbType.String, size: n)`.

@@ -126,3 +126,139 @@
 - **Fuera de alcance, para otro cambio:** `SA_PASSWORD` tiene un valor por defecto en `docker-compose.yml`; viene de `main`.
 - **`dotnet build` / `dotnet test`:** 0 advertencias, 0 errores; 42/42 pruebas correctas.
 - **Aprendí:** con Docker en marcha y poca memoria, `dotnet test` se colgaba antes de ejecutar ninguna prueba y un contenedor quedó zombi. Cerrando Docker, las pruebas pasaron en menos de un segundo.
+
+## E3 · Categorías — tarea 5.1 (`init.sql` idempotente, D11)
+- **Fecha:** 09-11-2026
+- **Cambio de OpenSpec:** `add-categories`
+- **Entorno:** proyecto de compose aparte (`docker compose -p inv-verify ...`) con su propio volumen, para no borrar `inventory-api_sqldata`. El `sqlserver` principal se paró durante la prueba y se volvió a arrancar al final; el proyecto `inv-verify` se eliminó con `down -v`. Las consultas a `sys.columns`, `sys.indexes` y `sys.default_constraints` se ejecutaron con `sqlcmd` dentro del contenedor (el secreto se lee de la variable del contenedor y no se imprime).
+- **Resultados:**
+
+  | Escenario | `dbinit` | `Name` (collation) | `UX_Categories_Name` | Segunda ejecución de `init.sql` | Resultado |
+  |---|---|---|---|---|---|
+  | Volumen nuevo | 0 | `SQL_Latin1_General_CP1_CI_AS` | único, `has_filter = 1`, `([IsActive]=(1))` | sin cambios (instantánea idéntica) | OK |
+  | Volumen anterior (`init.sql` de `main` + 2 filas) | 0 | `SQL_Latin1_General_CP1_CI_AS` | `has_filter = 1` (antes, sin filtro) | sin cambios | OK; las filas quedan con `IsActive = 1` |
+  | Volumen anterior con `Name` en `Latin1_General_CS_AS` y el índice sin filtro | 0 | pasa de `Latin1_General_CS_AS` a `SQL_Latin1_General_CP1_CI_AS` | se elimina y se recrea con `has_filter = 1` | sin cambios | OK; ejercita la rama de `ALTER COLUMN` |
+- **`dotnet build` / `dotnet test`:** 0 advertencias, 0 errores; 95/95 pruebas correctas.
+- **Aprendí:** la imagen de SQL Server ya usa `SQL_Latin1_General_CP1_CI_AS` por defecto, así que con un volumen anterior normal el `ALTER COLUMN` no se ejecuta. Para probar esa rama hubo que forzar otra collation. Además, el índice debe eliminarse también cuando solo la collation es incorrecta, porque SQL Server no permite cambiar la collation de una columna indexada. En Git Bash, `docker exec` necesita `MSYS_NO_PATHCONV=1` para no reescribir las rutas `/opt/...`.
+
+## E3 · Categorías — tarea 10.1 (verificación de extremo a extremo)
+- **Fecha:** 10-11-2026 (UTC)
+- **Cambio de OpenSpec:** `add-categories`
+- **Entorno:** `docker compose up -d --build` (`dbinit` terminó con 0). Tokens de `inventory-client` pedidos con `curl` a `http://localhost:8081/realms/inventory/protocol/openid-connect/token` (`grant_type=client_credentials`, con `scope=inventory.read`, `inventory.write` o los dos). El secreto se lee de `.env` y no se imprime. Las peticiones usan `curl -s -X <método> -H "Authorization: Bearer $TOKEN" http://localhost:8080<ruta>`; los cuerpos se envían con `--data-binary @body.json` y `Content-Type: application/json`.
+- **Datos previos:** había una categoría de pruebas anteriores (`Herramientas`) y ningún producto. Se desactivó con `DELETE /api/categories/{id}` (204), sin borrar la fila, para partir de cero categorías activas.
+- **Aviso sobre `curl` en Windows:** un cuerpo con tildes pasado como argumento (`-d '{ "name": "Tornillería" }'`) llega a la API en la página de códigos ANSI y responde 400 "El cuerpo de la petición no es un JSON válido.". Es un problema del cliente, no de la API: enviando el cuerpo desde un archivo UTF-8 (`--data-binary @body.json`), todos los casos dan el resultado esperado.
+
+### `specs/categories`
+
+| Escenario | Petición | Resultado | ¿OK? |
+|---|---|---|---|
+| Alta correcta | `POST` `{ "name": "Tornillería", "description": "Tornillos y tuercas" }` (write) | 201, `createdAtUtc` con `Z`, `Location: /api/categories/f5f0df04-…` igual al `id` | Sí |
+| Alta sin descripción | `POST` `{ "name": "Pinturas" }` | 201, `"description": null` | Sí |
+| Token sin `inventory.write` | `POST` con token de solo read | 403, cuerpo vacío | Sí |
+| Nombre con espacios en los extremos | `POST` `{ "name": "  Adhesivos  " }` | 201, `"name": "Adhesivos"` | Sí |
+| Nombre ausente | `POST` `{ "description": "Sin nombre" }` | 400, "El nombre de la categoría es obligatorio." | Sí |
+| Nombre solo con espacios | `POST` `{ "name": "     " }` | 400, "El nombre de la categoría es obligatorio." | Sí |
+| Nombre de 100 caracteres | `POST` con 100 × `a` | 201 | Sí |
+| Nombre de 101 caracteres | `POST` con `"  " + 101 × b + "  "` | 400, "… no puede superar los 100 caracteres." | Sí |
+| Nombre repetido con otras mayúsculas | `POST` `{ "name": "TORNILLERÍA" }` | 409, "Ya existe una categoría con el nombre 'TORNILLERÍA'." | Sí |
+| Nombre repetido con espacios | `POST` `{ "name": " Tornillería " }` | 409 | Sí |
+| Altas simultáneas con el mismo nombre | 5 rondas de dos `POST` en paralelo (`&` + `wait`) con `"Pinturas 1"` … `"Pinturas 5"` | Las 5 rondas: `201 409`; una sola fila por nombre en la base | Sí |
+| Índice como defensa final | `sqlcmd`: `SET QUOTED_IDENTIFIER ON; INSERT … N'PINTURAS 1' …, IsActive = 1` | `Msg 2601 … unique index 'UX_Categories_Name'` | Sí |
+| Reutilizar el nombre de una desactivada | `DELETE` de `Tornillería` y luego `POST` `{ "name": "Tornillería" }` | 201 con `id` `8b72e81c-…`, distinto de `f5f0df04-…`; en la base, una fila inactiva y una activa | Sí |
+| Descripción solo con espacios | `POST` `{ "name": "Electricidad", "description": "   " }` | 201, `"description": null` | Sí |
+| Descripción de 501 caracteres | `POST` con `"  " + 501 × d + "  "` | 400, "La descripción de la categoría no puede superar los 500 caracteres." | Sí |
+| Categoría activa por id | `GET /api/categories/{id}` (read) | 200, `"name": "Tornillería"` | Sí |
+| Id inexistente (GET) | `GET /api/categories/3f2504e0-4f89-11d3-9a0c-0305e82c3301` | 404, "No existe una categoría activa con el id '…'." | Sí |
+| Categoría desactivada (GET) | `GET` del `id` de `Tornillería` desactivada | 404 | Sí |
+| Token sin `inventory.read` (GET por id) | `GET /api/categories/{id}` con token de solo write | 403, cuerpo vacío | Sí |
+| Id que no es un GUID (D10) | `GET /api/categories/abc` y `DELETE /api/categories/abc` | 404 con el cuerpo vacío en los dos | Sí |
+| Sin categorías | `GET /api/categories` con 0 activas | 200, `{"items":[],"page":1,"pageSize":20,"totalCount":0,"totalPages":0}` | Sí |
+| Excluye las desactivadas | 11 activas y 1 desactivada (`Herramientas`) en la base | `totalCount` 11 y `Herramientas` no aparece en `items` | Sí |
+| Orden por nombre | `GET /api/categories?pageSize=100` | `aaa…`, `Adhesivos`, `Electricidad`, `Jardinería`, `Pinturas`, `Pinturas 1` … `Pinturas 5`, `Tornillería` | Sí |
+| Primera página por defecto | 25 activas, `GET /api/categories` | 200, 20 elementos, `page` 1, `pageSize` 20, `totalCount` 25, `totalPages` 2 | Sí |
+| Página fuera de rango | `GET /api/categories?page=9&pageSize=20` | 200, `items` vacío, `page` 9, `totalCount` 25, `totalPages` 2 | Sí |
+| `page=0` | `GET /api/categories?page=0` | 400, "El parámetro 'page' debe ser un número entero mayor o igual que 1." | Sí |
+| `pageSize=0` | `GET /api/categories?pageSize=0` | 400, "El parámetro 'pageSize' debe ser un número entero entre 1 y 100." | Sí |
+| `pageSize=101` | `GET /api/categories?pageSize=101` | 400, mismo mensaje | Sí |
+| `pageSize=100` | `GET /api/categories?pageSize=100` | 200, `"pageSize":100` | Sí |
+| Parámetro que no es un número | `GET /api/categories?page=abc` | 400, "El parámetro 'page' debe ser un número entero." | Sí |
+| Desactivar sin productos | `DELETE` de `Tornillería` | 204; después `GET` por id da 404 y no aparece en el listado | Sí |
+| Desactivar con un producto activo | `sqlcmd`: `INSERT dbo.Products` con 1 activo y 1 inactivo en `Con producto activo`; `DELETE` | 409, "No se puede eliminar la categoría porque tiene productos activos."; `GET` por id sigue dando 200 | Sí |
+| Desactivar con solo productos inactivos | `sqlcmd`: 2 productos inactivos en `Solo productos inactivos`; `DELETE` | 204 | Sí |
+| Categoría ya desactivada | `DELETE` otra vez de `Tornillería` | 404 con mensaje | Sí |
+| Id inexistente (DELETE) | `DELETE /api/categories/3f2504e0-…` | 404, "No existe una categoría activa con el id '…'." | Sí |
+| Token sin `inventory.write` (DELETE) | `DELETE` con token de solo read | 403, cuerpo vacío | Sí |
+
+### `specs/api-errors`
+
+| Escenario | Petición | Resultado | ¿OK? |
+|---|---|---|---|
+| Error de validación | `POST` `{ "name": "     " }` | 400, `application/problem+json`, `status` 400, `detail` en español | Sí |
+| Recurso inexistente | `GET /api/categories/3f2504e0-…` | 404, `application/problem+json`, `status` 404 | Sí |
+| Conflicto | `POST` `{ "name": "TORNILLERÍA" }` | 409, `application/problem+json`, `status` 409 | Sí |
+| JSON mal formado | `POST` con el cuerpo `{ "name": ` | 400, "El cuerpo de la petición no es un JSON válido." | Sí |
+| Parámetro con tipo incorrecto | `GET /api/categories?pageSize=diez` | 400, "El parámetro 'pageSize' debe ser un número entero." | Sí |
+| Fallo de la base de datos | `docker compose stop sqlserver` y `GET /api/categories` | 500 tras unos 17 s, `detail` "Se produjo un error inesperado. Inténtalo de nuevo más tarde."; el cuerpo no contiene `exception`, `   at `, `sql`, `password` ni `server=`; el log de `api` registra el error de conexión de EF Core. Después, `docker compose start sqlserver` | Sí |
+| Petición sin token | `POST /api/categories` sin `Authorization` | 401, cuerpo vacío | Sí |
+
+Los 400 del dominio y de la paginación llegan con `application/problem+json`, y los de la fábrica de modelo inválido con `application/problem+json; charset=utf-8`. Los dos cumplen la especificación.
+
+### `specs/api-auth` (MODIFIED)
+
+| Escenario | Petición | Resultado | ¿OK? |
+|---|---|---|---|
+| Petición sin token | `GET /api/categories` sin `Authorization` | 401, cuerpo vacío | Sí |
+| Token con firma inválida | Token con el primer carácter de la firma cambiado | 401, `error_description="The signature is invalid"` | Sí |
+| Token caducado | Token de 300 s (`exp − iat`) usado a los 340 s | 200 recién emitido; 401 a los 340 s, `error_description="The token expired at '11/10/2026 04:05:55'"` | Sí |
+| Token de otro emisor | Token del realm `master` (`admin-cli`, credenciales de `.env` sin imprimir), `iss=http://localhost:8081/realms/master` | 401, `error_description="The issuer 'http://localhost:8081/realms/master' is invalid"` | Sí |
+| Token de otra audiencia | `api` recreada con `Auth__Audience=otra-api` (override temporal, `--no-deps --force-recreate`) | 401, `error_description="The audience 'inventory-api' is invalid"` | Sí |
+| Solo lectura en un endpoint de lectura | `GET /api/categories` (read) | 200 | Sí |
+| Solo lectura en un endpoint de escritura | `POST /api/categories` (read) | 403, cuerpo vacío | Sí |
+| Solo escritura en un endpoint de lectura | `GET /api/categories` (write) | 403, cuerpo vacío | Sí |
+| Token con ambos scopes | `POST` `{ "name": "Jardinería" }` (read + write) | 201 | Sí |
+| Diagnóstico eliminado (REMOVED) | `GET /api/auth/check-read` | 404; `whoami` sigue dando 200 con `{"clientId":"inventory-client","scopes":["inventory.read"]}` | Sí |
+
+- **Hallazgo:** con `api` recreada con `Auth__Issuer=http://otro-emisor:8081/realms/inventory`, un token del realm `inventory` respondió 200, no 401. JwtBearer acepta también el emisor de la metadata. Se registra en `docs/assumptions.md` y queda pendiente para un cambio aparte. Antes, la misma prueba dio 500 porque SQL Server aún estaba arrancando tras el `start`; repetida con la base lista, dio 200.
+- Al terminar, `api` se recreó con la configuración normal (`docker compose up -d --no-deps --force-recreate api`): `GET /api/categories` dio 200.
+
+### `specs/dev-identity-provider` (MODIFIED)
+
+- **Comprobado con `curl`:** `swagger.json` publica `oauth2` con `clientCredentials`, el `tokenUrl` `http://localhost:8081/realms/inventory/protocol/openid-connect/token` y los dos scopes, además de la opción `Bearer`. Las rutas son `/api/auth/whoami`, `/api/categories` (`get`, `post`) y `/api/categories/{id}` (`get`, `delete`). El preflight `OPTIONS` al endpoint de token con `Origin: http://localhost:8080` responde 200 con `Access-Control-Allow-Origin: http://localhost:8080`.
+
+| Escenario | Pasos en Swagger UI | Resultado | ¿OK? |
+|---|---|---|---|
+| Autorizar con client credentials | Authorize → `oauth2`, `inventory-client`, su secreto y solo `inventory.read`; `GET /api/categories` y `POST /api/categories` `{ "name": "Swagger" }` | `GET` 200 y `POST` 403 | Sí |
+| Sin autorizar | Logout; `GET` y `POST /api/categories` | 401 en los dos | Sí |
+| Pegar un token bearer | Token con `inventory.write` obtenido con `curl`, pegado en `Bearer`; `POST /api/categories` `{ "name": "Swagger Bearer" }` | 201 | Sí |
+
+Los tres pasos en Swagger UI los hizo a mano la persona responsable del proyecto en el navegador, para que el secreto del cliente no pasara por el asistente. El token del tercer paso se generó con `curl`.
+
+- **Aprendí:** el `curl.exe` de Windows no envía en UTF-8 los argumentos con tildes; hay que mandar el cuerpo desde un archivo. `sqlcmd` sin `-I` no activa `QUOTED_IDENTIFIER`, y entonces cualquier `INSERT` en `Categories` falla por el índice filtrado: la advertencia de `docs/data-model.md` es real. Y cambiar la configuración de la API es la forma de descubrir qué valida de verdad: el emisor de la metadata se acepta aunque `Auth__Issuer` diga otra cosa.
+
+## E3 · Categorías — tarea 10.2 (revisión de Clean Code y cobertura)
+- **Fecha:** 10-11-2026 (UTC)
+- **Cambio de OpenSpec:** `add-categories`
+- **Alcance revisado:** `git diff main -- src tests` (base `3260e24`, 42 archivos) más los 18 archivos nuevos sin seguimiento de `src` y `tests`.
+- **Revisiones** (subagente `code-reviewer`, cada una con un contexto nuevo, sin el de la sesión que implementó):
+  1. **Rechazada:** 1 hallazgo bloqueante y 2 menores, más un posible fallo sin verificar.
+     - Bloqueante, regla 2: líneas en blanco entre la acción y el `Assert` en `DomainExceptionsTests` (3) y `GuardTests` (4). Se quitaron.
+     - Menor, regla 7: `PagedResult.CountPagesRoundingUp` recibía `pageSize` suelto. Ahora recibe `PageRequest`, igual que `CategoryReadRepository.CalculateOffset`.
+     - Menor, regla 5: las pruebas usaban cadenas de conexión parecidas a las reales (`Server=sqlserver;Database=InventoryDb`, `Password=secret`). Ahora usan `Server=test-server;Database=test-db` y `Password=not-a-real-password`.
+     - **Fallo confirmado:** `POST /api/categories` con el cuerpo vacío o `null` respondía 500. ASP.NET Core registra ese error con la clave vacía del `ModelState`, y `DescribeInvalidParameter` hacía `key[0]` (`IndexOutOfRangeException` en el log de `api`). Corregido con TDD: primero `[InlineData("")]` en `InvalidModelStateResponseFactoryTests`, que falló con la misma excepción; después `IsRequestBodyKey`, que trata la clave vacía como un error del cuerpo. En vivo, tras `docker compose up -d --build --no-deps api`: cuerpo vacío → 400 y `null` → 400, los dos con "El cuerpo de la petición no es un JSON válido."; JSON mal formado y `pageSize=diez` siguen dando 400. Se añadió la fila al contrato (`docs/api-contract.md`).
+  2. **Aprobada:** 0 hallazgos. Confirma las cuatro correcciones. Tres observaciones:
+     - Los repositorios no tienen pruebas automáticas; ya lo acepta D13 y se verificaron en la tarea 10.1. Queda como propuesta un proyecto de pruebas de integración en un cambio futuro.
+     - La redacción del supuesto de `PageRequest.Create` en `docs/assumptions.md` daba un motivo que no aplicaba. Se corrigió.
+     - Errata `0- **WHEN**` en el escenario "Nombre de 100 caracteres" de `specs/categories`. Se corrigió. La contraseña por defecto de `SA_PASSWORD` en `docker-compose.yml` ya estaba anotada como fuera de alcance (viene de `main`).
+- **`dotnet build` / `dotnet test`:** 0 advertencias, 0 errores; 115/115 pruebas correctas (114 + el caso de la clave vacía).
+- **Cobertura con Coverlet** (`dotnet test --collect:"XPlat Code Coverage"`, `coverlet.collector` 3.1.2, formato Cobertura):
+
+  | Ensamblado | Líneas | Ramas |
+  |---|---|---|
+  | `Inventory.Domain` | 100,0 % | 100,0 % |
+  | `Inventory.Application` | 100,0 % | 100,0 % |
+  | `Inventory.Api` | 68,8 % | 82,1 % |
+  | `Inventory.Infrastructure` | 3,7 % | 0,0 % |
+  | **Total** | **65,0 % (347/534)** | **74,2 %** |
+
+  Lo que queda sin cubrir es composición o persistencia: `Program`, `CategoriesServiceCollectionExtensions` y `ConfigureSwaggerGenOptions` en Api, y `CategoryReadRepository`, `CategoryWriteRepository`, `InventoryReadDbContext`, `CategoryRecord`, `SqlConnectionFactory` y `SystemClock` en Infrastructure. D13 deja sus pruebas fuera de las unitarias y se verificaron con Docker en la tarea 10.1. Los controladores, handlers, middleware, la fábrica de modelo inválido, la paginación y las reglas de dominio están cubiertos.
+- **Aprendí:** la primera revisión apuntó un posible fallo que no pudo ejecutar. Probarlo en vivo antes de decidir convirtió una sospecha en un 500 real, que ninguna de las pruebas de la 10.1 había tocado porque todos los casos de formato inválido llevaban algún cuerpo.

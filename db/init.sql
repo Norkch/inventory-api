@@ -7,10 +7,22 @@ GO
 IF OBJECT_ID('dbo.Categories') IS NULL
 CREATE TABLE dbo.Categories(
     Id           UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_Categories PRIMARY KEY,
-    Name         NVARCHAR(100)    NOT NULL,
+    Name         NVARCHAR(100)    COLLATE SQL_Latin1_General_CP1_CI_AS NOT NULL,
     Description  NVARCHAR(500)    NULL,
+    IsActive     BIT              NOT NULL CONSTRAINT DF_Categories_IsActive DEFAULT 1,
     CreatedAtUtc DATETIME2        NOT NULL CONSTRAINT DF_Categories_CreatedAtUtc DEFAULT SYSUTCDATETIME()
 );
+GO
+IF COL_LENGTH('dbo.Categories', 'IsActive') IS NULL
+    ALTER TABLE dbo.Categories ADD IsActive BIT NOT NULL CONSTRAINT DF_Categories_IsActive DEFAULT 1;
+GO
+IF EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID('dbo.Categories') AND name = 'UX_Categories_Name')
+   AND (EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID('dbo.Categories') AND name = 'UX_Categories_Name' AND has_filter = 0)
+        OR EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('dbo.Categories') AND name = 'Name' AND collation_name <> 'SQL_Latin1_General_CP1_CI_AS'))
+    DROP INDEX UX_Categories_Name ON dbo.Categories;
+GO
+IF EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('dbo.Categories') AND name = 'Name' AND collation_name <> 'SQL_Latin1_General_CP1_CI_AS')
+    ALTER TABLE dbo.Categories ALTER COLUMN Name NVARCHAR(100) COLLATE SQL_Latin1_General_CP1_CI_AS NOT NULL;
 GO
 IF OBJECT_ID('dbo.Suppliers') IS NULL
 CREATE TABLE dbo.Suppliers(
@@ -61,7 +73,7 @@ CREATE TABLE dbo.InventoryMovements(
 );
 GO
 IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'UX_Categories_Name')
-    CREATE UNIQUE INDEX UX_Categories_Name ON dbo.Categories(Name);
+    CREATE UNIQUE INDEX UX_Categories_Name ON dbo.Categories(Name) WHERE IsActive = 1;
 IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'UX_Suppliers_Nit')
     CREATE UNIQUE INDEX UX_Suppliers_Nit ON dbo.Suppliers(Nit);
 IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'UX_Products_Sku')

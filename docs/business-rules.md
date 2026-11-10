@@ -1,6 +1,6 @@
 # Reglas de negocio
 
-Última actualización: 2026-11-06 · Estado: borrador para revisión
+Última actualización: 2026-11-09 · Estado: borrador para revisión
 
 ## Convenciones
 - **ID:** `BR-NN`, estable. Una regla eliminada no reutiliza su número.
@@ -10,7 +10,7 @@
 ## Entidades
 | Entidad | Campos |  Notas |
 |---|---|---|---|
-| Category | Id, Name, Description, CreatedAtUtc | Nombre único sin distinguir mayúsculas |
+| Category | Id, Name, Description, IsActive, CreatedAtUtc | Nombre único entre las activas, sin distinguir mayúsculas. Se desactiva, no se borra (BR-05) |
 | Product | Id, CategoryId, Sku, Name, Description, StockQuantity, IsActive, CreatedAtUtc, UpdatedAtUtc | El stock solo cambia con movimientos |
 | InventoryMovement | Id, ProductId, MovementType, Quantity, StockAfter, Reason, OccurredAtUtc, RegisteredBy |Inmutable |
 | ProductSupplier | Id, ProductId, SupplierId, SupplierSku, CreatedAtUtc |Relación muchos a muchos entre producto y proveedor |
@@ -20,9 +20,9 @@
 |---|---|---|---|
 | BR-01 | El SKU es obligatorio, único (sin distinguir mayúsculas), se recorta y tiene máximo 50 caracteres | 400 si falta, 409 si ya existe |
 | BR-02 | El nombre del producto es obligatorio (máximo 200 caracteres) | 400 |
-| BR-03 | Un producto debe pertenecer a una categoría existente |  400 |
-| BR-04 | El nombre de categoría es obligatorio, único y de máximo 100 caracteres | 400 o 409 |
-| BR-05 | No se puede eliminar una categoría con productos activos | 409 |
+| BR-03 | Un producto debe pertenecer a una categoría que exista y esté activa |  400 |
+| BR-04 | El nombre de categoría se recorta, es obligatorio, tiene máximo 100 caracteres y es único entre las categorías activas, sin distinguir mayúsculas. El nombre de una categoría desactivada se puede reutilizar | 400 o 409 |
+| BR-05 | Eliminar una categoría es lógico (`IsActive = false`) y solo se permite si no tiene productos activos; los productos inactivos no lo impiden. Su nombre queda libre para otra categoría | 409 si tiene productos activos, 404 si no existe o ya está desactivada |
 | BR-06 | Eliminar un producto es lógico (`IsActive = false`) y conserva sus movimientos | 404 si ya no está activo |
 | BR-07 | Un producto nuevo empieza con stock 0; el stock solo cambia con movimientos | El campo se ignora |
 | BR-08 | Un proveedor tiene nombre (máximo 200) y NIT (máximo 30) obligatorios; el NIT es único | 400 o 409 |
