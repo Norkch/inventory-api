@@ -26,4 +26,12 @@ public sealed class DomainExceptionsTests
         var exception = new ConflictException(SpanishMessage);
         Assert.Equal(SpanishMessage, exception.Message);
     }
+
+    [Fact]
+    public void InsufficientStockException_IsAConflictWithSpanishMessage()
+    {
+        Exception exception = new InsufficientStockException(SpanishMessage);
+        Assert.IsAssignableFrom<ConflictException>(exception);
+        Assert.Equal(SpanishMessage, exception.Message);
+    }
 }

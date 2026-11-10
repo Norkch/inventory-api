@@ -6,6 +6,7 @@ namespace Inventory.Api.Configuration;
 
 public sealed class ConfigureJwtBearerOptions : IConfigureNamedOptions<JwtBearerOptions>
 {
+    private const string MissingSubjectFailure = "The token has no 'sub' claim.";
     private static readonly TimeSpan AllowedClockSkew = TimeSpan.FromSeconds(30);
     private readonly AuthOptions _authOptions;
 
@@ -28,6 +29,17 @@ public sealed class ConfigureJwtBearerOptions : IConfigureNamedOptions<JwtBearer
         options.RequireHttpsMetadata = false;
         options.MapInboundClaims = false;
         options.TokenValidationParameters = CreateTokenValidationParameters();
+        options.Events = new JwtBearerEvents { OnTokenValidated = RejectTokenWithoutSubject };
+    }
+
+    private static Task RejectTokenWithoutSubject(TokenValidatedContext context)
+    {
+        if (context.Principal is null || !SubjectClaimRequirement.IsSatisfiedBy(context.Principal))
+        {
+            context.Fail(MissingSubjectFailure);
+        }
+
+        return Task.CompletedTask;
     }
 
     private TokenValidationParameters CreateTokenValidationParameters()

@@ -1,6 +1,6 @@
 namespace Inventory.Domain.Exceptions;
 
-public sealed class ConflictException : Exception
+public class ConflictException : Exception
 {
     public ConflictException(string message)
         : base(message)
