@@ -15,7 +15,6 @@ public sealed class GuardTests
     public void AgainstBlank_Rejects_NullEmptyOrWhitespace(string? value)
     {
         var exception = Assert.Throws<ValidationException>(() => Guard.AgainstBlank(value, SpanishMessage));
-
         Assert.Equal(SpanishMessage, exception.Message);
     }
 
@@ -23,7 +22,6 @@ public sealed class GuardTests
     public void AgainstBlank_Accepts_Text()
     {
         var exception = Record.Exception(() => Guard.AgainstBlank("Texto", SpanishMessage));
-
         Assert.Null(exception);
     }
 
@@ -31,7 +29,6 @@ public sealed class GuardTests
     public void AgainstTooLong_Accepts_TextAtMaxLength()
     {
         var exception = Record.Exception(() => Guard.AgainstTooLong(new string('a', MaxLength), MaxLength, SpanishMessage));
-
         Assert.Null(exception);
     }
 
@@ -39,7 +36,6 @@ public sealed class GuardTests
     public void AgainstTooLong_Rejects_TextOneCharacterOverMaxLength()
     {
         var exception = Assert.Throws<ValidationException>(() => Guard.AgainstTooLong(new string('a', MaxLength + 1), MaxLength, SpanishMessage));
-
         Assert.Equal(SpanishMessage, exception.Message);
     }
 }

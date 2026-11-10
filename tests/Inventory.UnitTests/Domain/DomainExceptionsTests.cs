@@ -10,7 +10,6 @@ public sealed class DomainExceptionsTests
     public void ValidationException_KeepsSpanishMessage()
     {
         var exception = new ValidationException(SpanishMessage);
-
         Assert.Equal(SpanishMessage, exception.Message);
     }
 
@@ -18,7 +17,6 @@ public sealed class DomainExceptionsTests
     public void NotFoundException_KeepsSpanishMessage()
     {
         var exception = new NotFoundException(SpanishMessage);
-
         Assert.Equal(SpanishMessage, exception.Message);
     }
 
@@ -26,7 +24,6 @@ public sealed class DomainExceptionsTests
     public void ConflictException_KeepsSpanishMessage()
     {
         var exception = new ConflictException(SpanishMessage);
-
         Assert.Equal(SpanishMessage, exception.Message);
     }
 }

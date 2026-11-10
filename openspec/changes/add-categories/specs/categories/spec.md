@@ -38,7 +38,7 @@ La API SHALL recortar los espacios de los extremos del nombre antes de validarlo
 - **THEN** la respuesta es 400 con un mensaje en español que indica que el nombre es obligatorio
 
 #### Scenario: Nombre de 100 caracteres
-0- **WHEN** un cliente con `inventory.write` crea una categoría con un nombre de exactamente 100 caracteres
+- **WHEN** un cliente con `inventory.write` crea una categoría con un nombre de exactamente 100 caracteres
 - **THEN** la respuesta es 201
 
 #### Scenario: Nombre de 101 caracteres

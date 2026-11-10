@@ -1,6 +1,6 @@
 # Arquitectura
 
-Última actualización: 2026-11-08
+Última actualización: 2026-11-09
 
 ## Resumen
 API REST en .NET 6 con arquitectura limpia en cuatro capas y separación de comandos y consultas (CQRS). Las escrituras usan Dapper con SQL explícito y las lecturas usan EF Core sin seguimiento. La base es SQL Server en Docker, sin llaves foráneas.
@@ -24,12 +24,25 @@ Las dependencias de código apuntan solo hacia el dominio.
 ## CQRS
 | Lado | Casos de uso | Puertos | Implementación |
 |---|---|---|---|
-| Comandos (escritura) | CreateCategory, DeleteCategory, CreateProduct, DeleteProduct, RegisterMovement;  CreateSupplier, LinkProductSupplier, UnlinkProductSupplier| `I…WriteRepository` | Dapper |
-| Consultas (lectura) | ListProducts y las demás consultas | `I…ReadRepository` | EF Core con `AsNoTracking` |
+| Comandos (escritura) | CreateCategory, DeleteCategory (desactivación), CreateProduct, DeleteProduct, RegisterMovement;  CreateSupplier, LinkProductSupplier, UnlinkProductSupplier| `I…WriteRepository` | Dapper |
+| Consultas (lectura) | GetCategoryById, ListCategories, ListProducts y las demás consultas | `I…ReadRepository` | EF Core con `AsNoTracking` |
 
-Regla: un handler de comando nunca usa un puerto de lectura y un handler de consulta nunca usa uno de escritura. Si un comando necesita comprobar algo (por ejemplo, que el SKU no existe), el puerto de **escritura** expone esa comprobación.
+Regla: un handler de comando nunca usa un puerto de lectura y un handler de consulta nunca usa uno de escritura. Si un comando necesita comprobar algo (por ejemplo, que el SKU no existe), el puerto de **escritura** expone esa comprobación. La prueba `Architecture/CqrsSeparationTests` lo comprueba por reflexión sobre el ensamblado de Application.
 
 Sin MediatR: los handlers son clases explícitas que se inyectan donde se usan.
+
+### Casos de uso de categorías (`add-categories`)
+| Caso de uso | Tipo | Handler | Puerto | Implementación | Resultado |
+|---|---|---|---|---|---|
+| CreateCategory | Comando | `CreateCategoryHandler` (`CreateCategoryCommand`) | `ICategoryWriteRepository` + `IClock` | `CategoryWriteRepository` (Dapper) | `CategoryDto`; 400 (BR-04) o 409 si el nombre ya existe entre las activas |
+| DeleteCategory | Comando | `DeleteCategoryHandler` (`DeleteCategoryCommand`) | `ICategoryWriteRepository` | `CategoryWriteRepository` (Dapper, `UPDATE` condicional atómico) | Desactivación (BR-05); 404 o 409 según `CategoryDeactivationResult` |
+| GetCategoryById | Consulta | `GetCategoryByIdHandler` (`GetCategoryByIdQuery`) | `ICategoryReadRepository` | `CategoryReadRepository` (EF Core, `InventoryReadDbContext`) | `CategoryDto` de una categoría activa; 404 si no hay ninguna |
+| ListCategories | Consulta | `ListCategoriesHandler` (`ListCategoriesQuery`) | `ICategoryReadRepository` | `CategoryReadRepository` (EF Core) | `PagedResult<CategoryDto>` con las activas, por `Name` y luego `Id` (BR-18) |
+
+### Piezas comunes (`Application/Common`)
+- `PageRequest`: `PageRequest.Create(page, pageSize)` aplica los valores por defecto (1 y 20) y valida los rangos de BR-18. Lanza `ValidationException` con un mensaje en español que nombra `page` o `pageSize`. La reutilizarán todos los listados.
+- `PagedResult<T>`: `Items`, `Page`, `PageSize`, `TotalCount` y `TotalPages` (`ceil(TotalCount / PageSize)`, 0 sin elementos). Conserva `Page` aunque la página esté fuera de rango.
+- `Abstractions/IClock`: da la fecha UTC actual a los comandos. `SystemClock` (Infrastructure) la implementa y las pruebas usan `FakeClock`.
 
 ## Dónde vive cada regla
 | Tipo de regla | Dónde | Por qué |

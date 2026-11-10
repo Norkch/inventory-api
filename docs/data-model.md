@@ -84,6 +84,6 @@ Relación muchos a muchos. Único: `(ProductId, SupplierId)`.
 | UX_Products_Sku | Products | Sku | SKU único |
 | IX_Products_CategoryId | Products | CategoryId (incluye IsActive) | Buscar productos por categoría y comprobar si una categoría tiene productos activos |
 | IX_InventoryMovements_ProductId_OccurredAtUtc | InventoryMovements | ProductId, OccurredAtUtc DESC | Historial por producto |
-| UX_Suppliers_NitId | Suppliers | Nit | NIT único |
+| UX_Suppliers_Nit | Suppliers | Nit | NIT único |
 | UX_ProductSuppliers_Link | ProductSuppliers | ProductId, SupplierId | Sin asociaciones duplicadas |
 | IX_ProductSuppliers_SupplierId | ProductSuppliers | SupplierId | Productos de un proveedor |

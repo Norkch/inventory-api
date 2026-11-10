@@ -1,5 +1,4 @@
 using System.Reflection;
-using Inventory.Api.Authorization;
 using Inventory.Api.Contracts;
 using Inventory.Api.Controllers;
 using Inventory.Application.Security;
@@ -29,34 +28,11 @@ public class AuthControllerTests
     }
 
     [Fact]
-    public void CheckRead_ConfirmsReadPermissionInSpanish()
-    {
-        var response = ReadOkValue<AccessCheckResponse>(CreateController("inventory.read").CheckRead().Result);
-        Assert.StartsWith("Permiso de lectura concedido", response.Message);
-    }
-
-    [Fact]
-    public void CheckWrite_ConfirmsWritePermissionInSpanish()
-    {
-        var response = ReadOkValue<AccessCheckResponse>(CreateController("inventory.write").CheckWrite().Result);
-        Assert.StartsWith("Permiso de escritura concedido", response.Message);
-    }
-
-    [Fact]
     public void Controller_RequiresAuthenticatedUser()
     {
         var attribute = typeof(AuthController).GetCustomAttribute<AuthorizeAttribute>();
         Assert.NotNull(attribute);
         Assert.Null(attribute!.Policy);
-    }
-
-    [Theory]
-    [InlineData(nameof(AuthController.CheckRead), ScopePolicies.InventoryRead)]
-    [InlineData(nameof(AuthController.CheckWrite), ScopePolicies.InventoryWrite)]
-    public void CheckEndpoint_RequiresItsScopePolicy(string actionName, string policyName)
-    {
-        var attribute = typeof(AuthController).GetMethod(actionName)!.GetCustomAttribute<AuthorizeAttribute>();
-        Assert.Equal(policyName, attribute?.Policy);
     }
 
     private static AuthController CreateController(string scopeClaim)

@@ -8,7 +8,7 @@ public sealed class PagedResult<T>
         Page = pageRequest.Page;
         PageSize = pageRequest.PageSize;
         TotalCount = totalCount;
-        TotalPages = CountPagesRoundingUp(totalCount, pageRequest.PageSize);
+        TotalPages = CountPagesRoundingUp(totalCount, pageRequest);
     }
 
     public IReadOnlyList<T> Items { get; }
@@ -21,8 +21,8 @@ public sealed class PagedResult<T>
 
     public int TotalPages { get; }
 
-    private static int CountPagesRoundingUp(int totalCount, int pageSize)
+    private static int CountPagesRoundingUp(int totalCount, PageRequest pageRequest)
     {
-        return (totalCount + pageSize - 1) / pageSize;
+        return (totalCount + pageRequest.PageSize - 1) / pageRequest.PageSize;
     }
 }

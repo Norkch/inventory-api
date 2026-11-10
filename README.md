@@ -44,7 +44,7 @@ Requisitos: Docker Desktop (o Docker Engine con Compose v2) y los puertos `8080`
        -d client_secret=<INVENTORY_CLIENT_SECRET> --data-urlencode "scope=inventory.read inventory.write"
      ```
 
-5. **Probar:** `GET /api/auth/whoami` muestra el cliente y los scopes del token. Con solo `inventory.read`, `check-read` da 200 y `check-write` da 403; sin autorizar, ambos dan 401. El contrato completo está en [`docs/api-contract.md`](docs/api-contract.md).
+5. **Probar:** `GET /api/auth/whoami` muestra el cliente y los scopes del token. Con solo `inventory.read`, `GET /api/categories` da 200 y `POST /api/categories` da 403; con `inventory.write`, `POST /api/categories` con `{ "name": "Tornillería" }` da 201; sin autorizar, ambos dan 401. El contrato completo está en [`docs/api-contract.md`](docs/api-contract.md).
 
 6. **Parar:** `docker compose down`. Keycloak no guarda datos: al volver a levantarlo reimporta `keycloak/inventory-realm.json`.
 
