@@ -21,7 +21,7 @@ La API SHALL leer la dirección de metadata, el emisor y la audiencia válidos, 
 Toda petición a una ruta bajo `/api` SHALL incluir un token bearer válido: firma verificable con las claves publicadas por el emisor, `iss` igual al emisor configurado, `aud` con la audiencia configurada y sin caducar. En caso contrario la API MUST responder 401 con el cuerpo vacío.
 
 #### Scenario: Petición sin token
-- **WHEN** un cliente llama a `GET /api/auth/check-read` sin cabecera `Authorization`
+- **WHEN** un cliente llama a `GET /api/categories` sin cabecera `Authorization`
 - **THEN** la respuesta es 401 con el cuerpo vacío
 
 #### Scenario: Token con firma inválida
@@ -67,16 +67,20 @@ La API SHALL tratar el claim `scope` como una lista de scopes separados por espa
 Los endpoints de lectura SHALL exigir el scope `inventory.read` y los de escritura el scope `inventory.write`. Si el token es válido pero no tiene el scope exigido, la API MUST responder 403 con el cuerpo vacío.
 
 #### Scenario: Token de solo lectura en un endpoint de lectura
-- **WHEN** un cliente con un token válido que solo tiene `inventory.read` llama a `GET /api/auth/check-read`
+- **WHEN** un cliente con un token válido que solo tiene `inventory.read` llama a `GET /api/categories`
 - **THEN** la respuesta es 200
 
 #### Scenario: Token de solo lectura en un endpoint de escritura
-- **WHEN** un cliente con un token válido que solo tiene `inventory.read` llama a `GET /api/auth/check-write`
+- **WHEN** un cliente con un token válido que solo tiene `inventory.read` llama a `POST /api/categories`
+- **THEN** la respuesta es 403 con el cuerpo vacío
+
+#### Scenario: Token de solo escritura en un endpoint de lectura
+- **WHEN** un cliente con un token válido que solo tiene `inventory.write` llama a `GET /api/categories`
 - **THEN** la respuesta es 403 con el cuerpo vacío
 
 #### Scenario: Token con ambos scopes
-- **WHEN** un cliente con un token válido que tiene `inventory.read` e `inventory.write` llama a `GET /api/auth/check-write`
-- **THEN** la respuesta es 200
+- **WHEN** un cliente con un token válido que tiene `inventory.read` e `inventory.write` crea una categoría válida con `POST /api/categories`
+- **THEN** la respuesta es 201
 
 ### Requirement: Identidad del cliente que llama
 `GET /api/auth/whoami` SHALL responder 200 a cualquier token válido, sin exigir scope, con el id del cliente tomado del claim `azp` y la lista de scopes del claim `scope`. Los nombres de los claims MUST leerse tal como vienen en el token, sin renombrarlos.
@@ -88,14 +92,3 @@ Los endpoints de lectura SHALL exigir el scope `inventory.read` y los de escritu
 #### Scenario: Token válido sin scopes de inventario
 - **WHEN** un cliente llama a `GET /api/auth/whoami` con un token válido sin `inventory.read` ni `inventory.write`
 - **THEN** la respuesta es 200 y `scopes` no incluye ningún scope de inventario
-
-### Requirement: Endpoints de diagnóstico temporales
-La API SHALL exponer `GET /api/auth/check-read`, que exige `inventory.read`, y `GET /api/auth/check-write`, que exige `inventory.write`. Ambos responden 200 con un mensaje en español cuando el scope está concedido. Son temporales y MUST eliminarse en la tarea de limpieza del entregable 3.
-
-#### Scenario: Diagnóstico de lectura concedido
-- **WHEN** un cliente con `inventory.read` llama a `GET /api/auth/check-read`
-- **THEN** la respuesta es 200 con un mensaje en español que confirma el permiso de lectura
-
-#### Scenario: Diagnóstico de escritura concedido
-- **WHEN** un cliente con `inventory.write` llama a `GET /api/auth/check-write`
-- **THEN** la respuesta es 200 con un mensaje en español que confirma el permiso de escritura
