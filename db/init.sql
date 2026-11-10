@@ -40,7 +40,7 @@ IF OBJECT_ID('dbo.Products') IS NULL
 CREATE TABLE dbo.Products(
     Id            UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_Products PRIMARY KEY,
     CategoryId    UNIQUEIDENTIFIER NOT NULL,
-    Sku           NVARCHAR(50)     NOT NULL,
+    Sku           NVARCHAR(50)     COLLATE SQL_Latin1_General_CP1_CI_AS NOT NULL,
     Name          NVARCHAR(200)    NOT NULL,
     Description   NVARCHAR(1000)   NULL,
     StockQuantity INT              NOT NULL CONSTRAINT DF_Products_StockQuantity DEFAULT 0 CONSTRAINT CK_Products_StockQuantity CHECK (StockQuantity >= 0),
@@ -48,6 +48,13 @@ CREATE TABLE dbo.Products(
     CreatedAtUtc  DATETIME2        NOT NULL CONSTRAINT DF_Products_CreatedAtUtc DEFAULT SYSUTCDATETIME(),
     UpdatedAtUtc  DATETIME2        NULL
 );
+GO
+IF EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID('dbo.Products') AND name = 'UX_Products_Sku')
+   AND EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('dbo.Products') AND name = 'Sku' AND collation_name <> 'SQL_Latin1_General_CP1_CI_AS')
+    DROP INDEX UX_Products_Sku ON dbo.Products;
+GO
+IF EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('dbo.Products') AND name = 'Sku' AND collation_name <> 'SQL_Latin1_General_CP1_CI_AS')
+    ALTER TABLE dbo.Products ALTER COLUMN Sku NVARCHAR(50) COLLATE SQL_Latin1_General_CP1_CI_AS NOT NULL;
 GO
 IF OBJECT_ID('dbo.ProductSuppliers') IS NULL
 CREATE TABLE dbo.ProductSuppliers(

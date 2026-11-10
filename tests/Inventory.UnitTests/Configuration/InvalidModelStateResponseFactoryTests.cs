@@ -1,7 +1,9 @@
 using Inventory.Api.Configuration;
+using Inventory.Api.Contracts;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.Abstractions;
+using Microsoft.AspNetCore.Mvc.Controllers;
 using Microsoft.AspNetCore.Mvc.ModelBinding;
 using Microsoft.AspNetCore.Routing;
 
@@ -29,9 +31,45 @@ public class InvalidModelStateResponseFactoryTests
     [InlineData("PageSize")]
     public void Create_ReturnsBadRequestNamingTheParameter_WhenParameterIsNotAnInteger(string key)
     {
-        var result = InvalidModelStateResponseFactory.Create(CreateActionContext(CreateModelStateWithError(key)));
+        var result = InvalidModelStateResponseFactory.Create(CreateActionContext(CreateModelStateWithError(key), typeof(PaginationRequest)));
         var problem = AssertBadRequestProblem(result);
         Assert.Equal("El parámetro 'pageSize' debe ser un número entero.", problem.Detail);
+    }
+
+    [Theory]
+    [InlineData("categoryId")]
+    [InlineData("CategoryId")]
+    public void Create_ReturnsBadRequestNamingTheParameter_WhenParameterIsNotAGuid(string key)
+    {
+        var result = InvalidModelStateResponseFactory.Create(CreateActionContext(CreateModelStateWithError(key), typeof(ListProductsRequest)));
+        var problem = AssertBadRequestProblem(result);
+        Assert.Equal("El parámetro 'categoryId' debe ser un identificador (GUID) válido.", problem.Detail);
+    }
+
+    [Fact]
+    public void Create_ReturnsBadRequestNamingTheParameter_WhenParameterIsAnIntegerOfAListOfProducts()
+    {
+        var result = InvalidModelStateResponseFactory.Create(CreateActionContext(CreateModelStateWithError("page"), typeof(ListProductsRequest)));
+        var problem = AssertBadRequestProblem(result);
+        Assert.Equal("El parámetro 'page' debe ser un número entero.", problem.Detail);
+    }
+
+    [Theory]
+    [InlineData("search")]
+    [InlineData("unknown")]
+    public void Create_ReturnsGenericFormatDetail_WhenParameterTypeIsNotKnown(string key)
+    {
+        var result = InvalidModelStateResponseFactory.Create(CreateActionContext(CreateModelStateWithError(key), typeof(ListProductsRequest)));
+        var problem = AssertBadRequestProblem(result);
+        Assert.Equal($"El parámetro '{key}' no tiene un formato válido.", problem.Detail);
+    }
+
+    [Fact]
+    public void Create_ReturnsInvalidJsonDetail_WhenCategoryIdInTheBodyIsNotAGuid()
+    {
+        var result = InvalidModelStateResponseFactory.Create(CreateActionContext(CreateModelStateWithError("$.categoryId"), typeof(CreateProductRequest)));
+        var problem = AssertBadRequestProblem(result);
+        Assert.Equal("El cuerpo de la petición no es un JSON válido.", problem.Detail);
     }
 
     private static ProblemDetails AssertBadRequestProblem(IActionResult result)
@@ -57,5 +95,13 @@ public class InvalidModelStateResponseFactoryTests
     private static ActionContext CreateActionContext(ModelStateDictionary modelState)
     {
         return new ActionContext(new DefaultHttpContext(), new RouteData(), new ActionDescriptor(), modelState);
+    }
+
+    private static ActionContext CreateActionContext(ModelStateDictionary modelState, Type requestType)
+    {
+        var parameter = new ControllerParameterDescriptor { Name = "request", ParameterType = requestType };
+        var actionDescriptor = new ActionDescriptor { Parameters = new List<ParameterDescriptor> { parameter } };
+
+        return new ActionContext(new DefaultHttpContext(), new RouteData(), actionDescriptor, modelState);
     }
 }

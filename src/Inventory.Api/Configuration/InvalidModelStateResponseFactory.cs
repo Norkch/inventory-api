@@ -1,5 +1,4 @@
 using Microsoft.AspNetCore.Mvc;
-using Microsoft.AspNetCore.Mvc.ModelBinding;
 
 namespace Inventory.Api.Configuration;
 
@@ -18,7 +17,7 @@ public static class InvalidModelStateResponseFactory
             Type = BadRequestType,
             Title = BadRequestTitle,
             Status = StatusCodes.Status400BadRequest,
-            Detail = DescribeErrors(context.ModelState)
+            Detail = DescribeErrors(context)
         };
         var result = new ObjectResult(problem) { StatusCode = StatusCodes.Status400BadRequest };
         result.ContentTypes.Add(ProblemJsonContentType);
@@ -26,15 +25,15 @@ public static class InvalidModelStateResponseFactory
         return result;
     }
 
-    private static string DescribeErrors(ModelStateDictionary modelState)
+    private static string DescribeErrors(ActionContext context)
     {
-        var invalidKeys = modelState.Where(entry => entry.Value?.Errors.Count > 0).Select(entry => entry.Key).ToList();
+        var invalidKeys = context.ModelState.Where(entry => entry.Value?.Errors.Count > 0).Select(entry => entry.Key).ToList();
         if (invalidKeys.Any(IsRequestBodyKey))
         {
             return InvalidJsonDetail;
         }
 
-        return string.Join(" ", invalidKeys.Select(DescribeInvalidParameter));
+        return string.Join(" ", invalidKeys.Select(key => DescribeInvalidParameter(context, key)));
     }
 
     private static bool IsRequestBodyKey(string key)
@@ -42,10 +41,21 @@ public static class InvalidModelStateResponseFactory
         return key.Length == 0 || key.StartsWith(JsonBodyKeyPrefix, StringComparison.Ordinal);
     }
 
-    private static string DescribeInvalidParameter(string key)
+    private static string DescribeInvalidParameter(ActionContext context, string key)
     {
         var parameterName = char.ToLowerInvariant(key[0]) + key.Substring(1);
+        var parameterType = ActionParameterTypeResolver.Resolve(context.ActionDescriptor, key);
 
-        return $"El parámetro '{parameterName}' debe ser un número entero.";
+        return $"El parámetro '{parameterName}' {DescribeExpectedFormat(parameterType)}";
+    }
+
+    private static string DescribeExpectedFormat(Type? parameterType)
+    {
+        if (parameterType == typeof(int))
+        {
+            return "debe ser un número entero.";
+        }
+
+        return parameterType == typeof(Guid) ? "debe ser un identificador (GUID) válido." : "no tiene un formato válido.";
     }
 }

@@ -122,3 +122,52 @@ La revisión de Clean Code de la tarea 8.2 dejó tres hallazgos menores. Se acep
   - `ExecuteAsync` (devuelve las filas afectadas, que es lo que usa el borrado lógico atómico de D4), `ExecuteScalarAsync<T>` y `QueryFirstOrDefaultAsync<T>`, con sobrecargas `(string sql, object? param, ...)` y `(CommandDefinition)`.
   - `CommandDefinition(sql, parameters, ..., cancellationToken: ...)`, para pasar el `CancellationToken`.
   - `DbString { Value, Length, IsAnsi = false, IsFixedLength = false }` para los parámetros `nvarchar` con su longitud (100 para `Name` y 500 para `Description`), como pide la tarea 6.3. Otra opción es `DynamicParameters.Add(name, value, DbType.String, size: n)`.
+
+## add-products (2026-11-10)
+
+### APIs de EF Core 6 y Dapper 2.1 confirmadas para productos (tarea 1.1)
+
+- **Aviso sobre la versión de EF Core:** igual que en `add-categories`, Context7 (`/dotnet/entityframework.docs`) sirve la rama `main`, de una versión mayor posterior a la 6. Su tabla de funciones de SQL Server dice que `string.Contains` se traduce a `LIKE N'%' + @value + N'%'`, pero no documenta cómo escapa los comodines, así que no se usa `Contains` para `search` (D6). Las firmas se confirmaron en los XML de los paquetes `6.0.36` de la caché de NuGet.
+- **EF Core 6.0.36:**
+  - `EF.Functions.Like(string matchExpression, string pattern, string escapeCharacter)` (`DbFunctionsExtensions`, paquete `microsoft.entityframeworkcore`). Context7 lo documenta como `LIKE @pattern ESCAPE @escapeCharacter`. No tiene implementación en memoria: si la consulta pasa a evaluarse en el cliente, lanza una excepción.
+  - `EF.Functions.Collate<TProperty>(TProperty operand, string collation)` (`RelationalDbFunctionsExtensions`, paquete `.relational`). Context7 lo documenta como `@operand COLLATE @collation` y avisa de que impide usar índices sobre esa columna, que es lo que ya asume D6 para `Name`.
+- **Dapper 2.1.89** (`lib/netstandard2.0`): `QuerySingleOrDefaultAsync<T>(IDbConnection, CommandDefinition)` para leer la fila de `UPDATE ... OUTPUT INSERTED.*` (D4), además de las APIs ya confirmadas en `add-categories` (`ExecuteAsync`, `ExecuteScalarAsync<T>`, `QueryFirstOrDefaultAsync<T>`).
+
+### `PUT`: el 404 gana a la categoría (D4)
+
+- La spec fija el orden de los errores del alta, pero no el del `PUT`. Si el producto no existe (o está borrado) **y** la categoría tampoco, se responde 404 y no 400.
+- Motivo: la URL identifica el recurso, y sin recurso no tiene sentido validar a qué categoría se mueve. El handler comprueba primero el producto y después la categoría, y lo prueba `UpdateProductHandlerTests`.
+
+### `UpdatedAtUtc` también al borrar (D5)
+
+- El borrado lógico fija `UpdatedAtUtc` con la fecha del borrado. La spec no lo pide; queda como registro del momento en que el producto dejó de estar activo.
+- No es visible por la API, porque un producto borrado no se devuelve.
+
+### Formato de las fechas de productos (D10)
+
+- Como en categorías, la respuesta 201 escribe `createdAtUtc` con el sufijo `Z`, porque viene de `IClock` (`DateTimeKind.Utc`).
+- Las lecturas y la respuesta 200 del `PUT` escriben `createdAtUtc` y `updatedAtUtc` **sin** sufijo, porque salen de columnas `datetime2` (la del `PUT`, del `OUTPUT INSERTED.*`) y llegan con `DateTimeKind.Unspecified`. Los valores siempre están en UTC.
+
+### `Product.Restore` recibe un `ProductSnapshot` (regla 7)
+
+- `Product.Create` recibe sus cinco valores sueltos, por el mismo motivo que `Category.Create`: son los datos con los que nace la entidad, y Domain no puede conocer `CreateProductCommand`.
+- `Product.Restore`, en cambio, necesitaría nueve valores. Para no pasarlos sueltos, recibe el record `ProductSnapshot` (Domain), que es también el tipo al que Dapper mapea la fila de `OUTPUT INSERTED.*`. Por eso el orden de las columnas del `OUTPUT` coincide con el de los parámetros del record.
+- `ProductChanges.Create` recibe sus cinco valores sueltos por el mismo motivo que `Product.Create`.
+
+### Puertos con objetos de criterio (regla 7)
+
+- `IProductReadRepository.ListActiveAsync` recibe `ProductListCriteria` (página, `categoryId` y `search` ya recortado), e `IProductWriteRepository.DeleteAsync` recibe `ProductDeletion` (id y fecha). Ninguno de los dos estaba en la lista de `design.md` (D1); se añadieron para no pasar valores sueltos.
+- `FindActiveCategoryAsync` y `ExistsActiveAsync` reciben un `Guid`, como `DeactivateAsync` en categorías: es un solo valor y no hay ningún objeto que lo contenga sin arrastrar datos que el método no usa.
+
+### Filtro y orden del listado sobre `ProductWithCategory` (D6)
+
+- EF Core 6 no traduce filtros ni orden sobre propiedades de un DTO creado con constructor. El repositorio hace el `join` hacia `ProductWithCategory` (inicialización de miembros, que EF sí traduce), filtra y ordena sobre él, y proyecta a `ProductDto` al final.
+
+### `ProductDeletion` en Application, `ProductChanges` en Domain (revisión de la tarea 9.2)
+
+- La revisión de Clean Code señaló que los dos objetos de intención de escritura viven en capas distintas. Se acepta así: `ProductChanges` valida reglas de dominio (BR-02, BR-03 y la descripción) y por eso está en Domain, mientras que `ProductDeletion` solo transporta el id y la fecha hasta el puerto, sin ninguna regla que validar.
+
+### Escenarios de base de datos sin prueba automática (revisión de la tarea 9.2)
+
+- El orden y los filtros del listado, la búsqueda con `LIKE ... ESCAPE` y `COLLATE`, la collation de `init.sql`, el SKU de un producto borrado y los dos casos de concurrencia no tienen prueba automática. EF Core InMemory no traduce `EF.Functions.Like` con escape ni `Collate`, y un SQL Server de pruebas (Testcontainers u otro) exige un paquete nuevo, que hay que aprobar antes.
+- Se verificaron todos a mano con Docker en la tarea 9.1 (`docs/bitacora.md`). Queda como deuda un proyecto de pruebas de integración en un cambio futuro.

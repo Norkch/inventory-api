@@ -7,7 +7,7 @@
 - Los identificadores son `UNIQUEIDENTIFIER` generados por la aplicación.
 - Todas las fechas son `DATETIME2` en UTC.
 - Se conservan las restricciones `PRIMARY KEY`, `UNIQUE`, `NOT NULL`, `DEFAULT` y `CHECK`, como última barrera de integridad.
-- Los índices únicos de texto aprovechan la intercalación por defecto de SQL Server, que no distingue mayúsculas. `Categories.Name` la declara de forma explícita (`SQL_Latin1_General_CP1_CI_AS`) para no depender de la configuración de la instancia.
+- Los índices únicos de texto aprovechan la intercalación por defecto de SQL Server, que no distingue mayúsculas. `Categories.Name` y `Products.Sku` la declaran de forma explícita (`SQL_Latin1_General_CP1_CI_AS`) para no depender de la configuración de la instancia.
 - Los índices filtrados (`WHERE ...`) exigen `QUOTED_IDENTIFIER ON` en las sesiones que modifican la tabla. `db/init.sql` y `Microsoft.Data.SqlClient` lo activan; quien escriba SQL a mano contra esas tablas también debe activarlo.
 - El esquema lo crea `db/init.sql`, idempotente, desde el contenedor `dbinit`. EF Core solo lee.
 
@@ -29,15 +29,17 @@ Eliminar una categoría es lógico (`IsActive = 0`, BR-05). El nombre de una cat
 |---|---|---|---|
 | Id | UNIQUEIDENTIFIER | No | PK |
 | CategoryId | UNIQUEIDENTIFIER | No | Referencia lógica a Categories |
-| Sku | NVARCHAR(50) | No | Único |
+| Sku | NVARCHAR(50) `COLLATE SQL_Latin1_General_CP1_CI_AS` | No | Único entre todos los productos, también los borrados, sin distinguir mayúsculas |
 | Name | NVARCHAR(200) | No | |
 | Description | NVARCHAR(1000) | Sí | |
 | StockQuantity | INT | No | Por defecto 0; `CHECK (StockQuantity >= 0)` |
 | IsActive | BIT | No | Por defecto 1  |
 | CreatedAtUtc | DATETIME2 | No | Por defecto: fecha actual UTC |
-| UpdatedAtUtc | DATETIME2 | Sí | |
+| UpdatedAtUtc | DATETIME2 | Sí | Lo fija la aplicación al editar y al borrar |
 
 `StockQuantity` es un saldo derivado: solo cambia con movimientos.
+
+Eliminar un producto es lógico (`IsActive = 0`, BR-06) y conserva su stock y sus movimientos. A diferencia del nombre de una categoría, el SKU de un producto borrado **no** se puede reutilizar: `UX_Products_Sku` no tiene filtro.
 
 ### InventoryMovements
 | Columna | Tipo | Null | Restricción |
@@ -81,7 +83,7 @@ Relación muchos a muchos. Único: `(ProductId, SupplierId)`.
 | Índice | Tabla | Columnas | Para qué |
 |---|---|---|---|
 | UX_Categories_Name | Categories | Name, filtrado `WHERE IsActive = 1` | Nombre único entre las categorías activas |
-| UX_Products_Sku | Products | Sku | SKU único |
+| UX_Products_Sku | Products | Sku, sin filtro | SKU único entre todos los productos, también los borrados |
 | IX_Products_CategoryId | Products | CategoryId (incluye IsActive) | Buscar productos por categoría y comprobar si una categoría tiene productos activos |
 | IX_InventoryMovements_ProductId_OccurredAtUtc | InventoryMovements | ProductId, OccurredAtUtc DESC | Historial por producto |
 | UX_Suppliers_Nit | Suppliers | Nit | NIT único |

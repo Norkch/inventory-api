@@ -24,8 +24,8 @@ Las dependencias de código apuntan solo hacia el dominio.
 ## CQRS
 | Lado | Casos de uso | Puertos | Implementación |
 |---|---|---|---|
-| Comandos (escritura) | CreateCategory, DeleteCategory (desactivación), CreateProduct, DeleteProduct, RegisterMovement;  CreateSupplier, LinkProductSupplier, UnlinkProductSupplier| `I…WriteRepository` | Dapper |
-| Consultas (lectura) | GetCategoryById, ListCategories, ListProducts y las demás consultas | `I…ReadRepository` | EF Core con `AsNoTracking` |
+| Comandos (escritura) | CreateCategory, DeleteCategory (desactivación), CreateProduct, UpdateProduct, DeleteProduct (desactivación), RegisterMovement;  CreateSupplier, LinkProductSupplier, UnlinkProductSupplier| `I…WriteRepository` | Dapper |
+| Consultas (lectura) | GetCategoryById, ListCategories, GetProductById, ListProducts y las demás consultas | `I…ReadRepository` | EF Core con `AsNoTracking` |
 
 Regla: un handler de comando nunca usa un puerto de lectura y un handler de consulta nunca usa uno de escritura. Si un comando necesita comprobar algo (por ejemplo, que el SKU no existe), el puerto de **escritura** expone esa comprobación. La prueba `Architecture/CqrsSeparationTests` lo comprueba por reflexión sobre el ensamblado de Application.
 
@@ -38,6 +38,17 @@ Sin MediatR: los handlers son clases explícitas que se inyectan donde se usan.
 | DeleteCategory | Comando | `DeleteCategoryHandler` (`DeleteCategoryCommand`) | `ICategoryWriteRepository` | `CategoryWriteRepository` (Dapper, `UPDATE` condicional atómico) | Desactivación (BR-05); 404 o 409 según `CategoryDeactivationResult` |
 | GetCategoryById | Consulta | `GetCategoryByIdHandler` (`GetCategoryByIdQuery`) | `ICategoryReadRepository` | `CategoryReadRepository` (EF Core, `InventoryReadDbContext`) | `CategoryDto` de una categoría activa; 404 si no hay ninguna |
 | ListCategories | Consulta | `ListCategoriesHandler` (`ListCategoriesQuery`) | `ICategoryReadRepository` | `CategoryReadRepository` (EF Core) | `PagedResult<CategoryDto>` con las activas, por `Name` y luego `Id` (BR-18) |
+
+### Casos de uso de productos (`add-products`)
+| Caso de uso | Tipo | Handler | Puerto | Implementación | Resultado |
+|---|---|---|---|---|---|
+| CreateProduct | Comando | `CreateProductHandler` (`CreateProductCommand`) | `IProductWriteRepository` + `IClock` | `ProductWriteRepository` (Dapper, `INSERT ... SELECT ... WHERE EXISTS` con `UPDLOCK, HOLDLOCK` sobre la categoría) | `ProductDto` con stock 0; 400 (BR-01, BR-02, BR-03) o 409 si el SKU ya existe, aunque el producto esté borrado |
+| UpdateProduct | Comando | `UpdateProductHandler` (`UpdateProductCommand`) | `IProductWriteRepository` + `IClock` | `ProductWriteRepository` (Dapper, `UPDATE ... OUTPUT INSERTED.*` con el mismo bloqueo) | `ProductDto` actualizado; nunca cambia `Sku` ni `StockQuantity`; 400 o 404 |
+| DeleteProduct | Comando | `DeleteProductHandler` (`DeleteProductCommand`) | `IProductWriteRepository` + `IClock` | `ProductWriteRepository` (Dapper, `UPDATE` condicional) | Desactivación (BR-06), conservando stock y movimientos; 404 si no está activo |
+| GetProductById | Consulta | `GetProductByIdHandler` (`GetProductByIdQuery`) | `IProductReadRepository` | `ProductReadRepository` (EF Core, `join` con `Categories`) | `ProductDto` de un producto activo con `CategoryName`; 404 si no hay ninguno |
+| ListProducts | Consulta | `ListProductsHandler` (`ListProductsQuery`) | `IProductReadRepository` | `ProductReadRepository` (EF Core, `EF.Functions.Like` con escape) | `PagedResult<ProductDto>` con los activos, filtrados por `categoryId` y `search`, por `Name` y luego `Id` (BR-18) |
+
+El dominio valida los productos con `ProductRules`, que usan `Product.Create` (alta) y `ProductChanges.Create` (edición, sin SKU ni stock). En Api, `AddPersistence` registra lo que comparten todos los módulos (`IClock`, `SqlConnectionFactory` e `InventoryReadDbContext`), y `AddCategories` y `AddProducts` registran cada uno sus puertos y handlers.
 
 ### Piezas comunes (`Application/Common`)
 - `PageRequest`: `PageRequest.Create(page, pageSize)` aplica los valores por defecto (1 y 20) y valida los rangos de BR-18. Lanza `ValidationException` con un mensaje en español que nombra `page` o `pageSize`. La reutilizarán todos los listados.
@@ -65,7 +76,7 @@ inventory-api/
 ├── .claude/         (skills/, agents/)
 ├── src/
 │   ├── Inventory.Domain/          Entities/ Enums/ Exceptions/ Guard.cs
-│   ├── Inventory.Application/     Abstractions/ Common/ Security/ Categories/ Products/ Movements/ [Suppliers/ Prices/]
+│   ├── Inventory.Application/     Abstractions/ Common/ Security/ Categories/ Products/ Movements/ [Suppliers/]
 │   ├── Inventory.Infrastructure/  Persistence/Write/ Persistence/Read/ Configuration/
 │   └── Inventory.Api/             Controllers/ Contracts/ Middleware/ Authorization/ Configuration/ Program.cs
 └── tests/Inventory.UnitTests/     Fakes/ y una clase de pruebas por handler

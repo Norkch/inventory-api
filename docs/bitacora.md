@@ -262,3 +262,103 @@ Los tres pasos en Swagger UI los hizo a mano la persona responsable del proyecto
 
   Lo que queda sin cubrir es composición o persistencia: `Program`, `CategoriesServiceCollectionExtensions` y `ConfigureSwaggerGenOptions` en Api, y `CategoryReadRepository`, `CategoryWriteRepository`, `InventoryReadDbContext`, `CategoryRecord`, `SqlConnectionFactory` y `SystemClock` en Infrastructure. D13 deja sus pruebas fuera de las unitarias y se verificaron con Docker en la tarea 10.1. Los controladores, handlers, middleware, la fábrica de modelo inválido, la paginación y las reglas de dominio están cubiertos.
 - **Aprendí:** la primera revisión apuntó un posible fallo que no pudo ejecutar. Probarlo en vivo antes de decidir convirtió una sospecha en un 500 real, que ninguna de las pruebas de la 10.1 había tocado porque todos los casos de formato inválido llevaban algún cuerpo.
+
+## E4 · Productos — tarea 5.1 (collation explícita de `Products.Sku`, D7)
+- **Fecha:** 10-11-2026
+- **Cambio de OpenSpec:** `add-products`
+- **Entorno:** proyecto de compose aparte (`docker compose -p invverify ...`) con su propio volumen, para no tocar `inventory-api_sqldata`. El proyecto principal no estaba levantado. `sqlcmd` se ejecutó dentro del contenedor, con el secreto leído de la variable del contenedor y sin imprimirlo. Al final, `docker compose -p invverify down -v`.
+- **Resultados:**
+
+  | Escenario | `init.sql` | `Sku` (collation) | `UX_Products_Sku` | Segunda ejecución | Resultado |
+  |---|---|---|---|---|---|
+  | Volumen anterior (`init.sql` de `HEAD`), `Sku` forzado a `Latin1_General_CS_AS` y 1 producto `TOR-001` | 0 | pasa de `Latin1_General_CS_AS` a `SQL_Latin1_General_CP1_CI_AS` | se elimina y se recrea, `has_filter = 0` | código 0, sin cambios | OK; la fila se conserva, y un `INSERT` de `tor-001` falla con 2601 en `UX_Products_Sku` |
+  | Volumen nuevo, servicio `dbinit` | 0 | `SQL_Latin1_General_CP1_CI_AS` | `has_filter = 0` | `dbinit` otra vez con código 0, sin cambios | OK |
+- **`dotnet build` / `dotnet test`:** 0 advertencias, 0 errores; 179/179 pruebas correctas.
+- **Aprendí:** igual que con `Categories.Name`, la rama de `ALTER COLUMN` solo se ejecuta si se fuerza otra collation, porque la imagen ya usa `SQL_Latin1_General_CP1_CI_AS`. El índice recreado debe seguir sin filtro: es lo que mantiene reservado el SKU de un producto borrado.
+
+## E4 · Productos — tarea 9.1 (verificación de extremo a extremo)
+- **Fecha:** 10-11-2026
+- **Cambio de OpenSpec:** `add-products`
+- **Entorno:** `docker compose up -d --build` (el `dbinit` aplicó el `init.sql` nuevo sobre el volumen `inventory-api_sqldata` con código 0). Tokens de `inventory-client` pedidos a Keycloak con `curl` para tres combinaciones de scopes (`read write`, solo `read`, solo `write`); el secreto se leyó de `.env` sin imprimirlo. Los datos de prueba llevan el sufijo `4002` en nombres y SKU. El stock y el movimiento del borrado con stock se pusieron a mano con `sqlcmd`, porque este cambio no tiene endpoint de movimientos.
+- **Nota sobre los datos de prueba:** quedan en la base de desarrollo, incluido un movimiento de inventario de prueba (`RegisteredBy = 'e2e'`). Los movimientos son inmutables, así que no se borró; se elimina con `docker compose down -v`.
+
+### `specs/products`
+
+| Requisito / escenario | Petición | Resultado |
+|---|---|---|
+| Alta correcta | `POST` válido | 201, `stockQuantity` 0, `updatedAtUtc` `null`, `categoryName`, `createdAtUtc` con `Z`, `Location: /api/products/{id}` |
+| Alta sin descripción, `stockQuantity: 50`, SKU con espacios | `"sku": "  TUE-4002  "`, `"stockQuantity": 50` | 201, `sku` recortado, `description` `null`, `stockQuantity` 0 |
+| Token sin `inventory.write` / sin token | `POST` | 403 y 401, cuerpo vacío |
+| SKU ausente / solo espacios | | 400 `El SKU del producto es obligatorio.` |
+| SKU de 50 / 51 caracteres | | 201 / 400 `... no puede superar los 50 caracteres.` |
+| SKU repetido con otras mayúsculas / con espacios | `tor-4002`, `" TOR-4002 "` | 409 `Ya existe un producto con el SKU '...'.` |
+| SKU de un producto borrado | `STK-4002` tras borrarlo | 409 con el mismo mensaje |
+| Altas simultáneas con el mismo SKU | 5 parejas de `POST` en paralelo | las 5 parejas dieron `[201 409]` |
+| Nombre ausente / 200 / 201 / repetido | | 400 / 201 / 400 / 201 |
+| Descripción solo espacios / 1000 / 1001 | | 201 con `null` / 201 / 400 |
+| `categoryId` ausente / inexistente / desactivada | | 400 `La categoría del producto es obligatoria.` / 400 `La categoría indicada no existe o no está activa.` (los dos últimos) |
+| `"categoryId": "abc"` en el cuerpo | | 400 `El cuerpo de la petición no es un JSON válido.` |
+| Orden: nombre vacío + categoría inexistente | | 400 por el nombre |
+| Orden: categoría inexistente + SKU repetido | | 400 por la categoría |
+| Alta simultánea con la desactivación de la categoría | ver abajo | se serializan en los dos órdenes |
+| `GET /{id}` activo / inexistente / borrado / no GUID / solo `write` | | 200 con `categoryName` / 404 / 404 / 404 sin cuerpo / 403 |
+| Listado: orden, solo activos, `categoryName` | categoría con 6 productos | 200, orden `Arandela`, `Caja 500`, `Descuento 50%`, `Perno`, `Tornillo 3/8`, `Tuerca` |
+| Listado sin parámetros | | `page` 1, `pageSize` 20 (16 productos activos en la base: `totalPages` 1) |
+| Paginación | `pageSize=2&page=2` | 2 elementos, `totalCount` 6, `totalPages` 3 |
+| `pageSize=101` / `page=abc` / solo `write` | | 400 sobre `pageSize` / 400 `El parámetro 'page' debe ser un número entero.` / 403 |
+| Filtro por categoría / inexistente / `categoryId=abc` | | solo esa categoría / 200 vacío / 400 `El parámetro 'categoryId' debe ser un identificador (GUID) válido.` |
+| `search=TORN` / `search=p-tor` (SKU `LP-TOR-4002`, nombre `Perno`) | | solo `Tornillo 3/8` / solo `Perno` |
+| `search=50%` | con `Descuento 50%` y `Caja 500` | solo `Descuento 50%` |
+| `search` solo espacios / combinado con `categoryId` | | los 6 / solo el de esa categoría |
+| `PUT` correcto con `sku` y `stockQuantity` en el cuerpo | otra categoría, `description: null`, `"sku": "OTRO-4002"`, `"stockQuantity": 99` | 200, nueva categoría y `categoryName`, `description` `null`, `sku` y `stockQuantity` sin cambios, `updatedAtUtc` sin `Z` |
+| `PUT` nombre vacío / categoría inexistente / categoría desactivada | | 400 con su mensaje; un `GET` posterior muestra el producto sin cambios |
+| `PUT` id inexistente / producto borrado / solo `read` | | 404 / 404 / 403 |
+| `DELETE` con stock 15 y un movimiento | | 204; la fila queda con `StockQuantity` 15, `IsActive` 0 y `UpdatedAtUtc` informado; el movimiento se conserva |
+| `DELETE` ya borrado / inexistente / solo `read` | | 404 / 404 / 403 |
+
+### BR-05 de `specs/categories`, ahora por la API
+
+| Escenario | Resultado |
+|---|---|
+| Desactivar una categoría con un producto activo | 409 `No se puede eliminar la categoría porque tiene productos activos.` |
+| Borrar su único producto y desactivarla | 204 y 204 |
+
+### Concurrencia entre el alta y la desactivación de la categoría (D3)
+
+- **Por la API:** una transacción de `sqlcmd` desactivó una categoría vacía y esperó 8 s antes del `COMMIT`. Un `POST` en esa categoría, lanzado 2 s después, esperó unos 7 s y respondió 400. La espera se produce ya en la comprobación previa (`FindActiveCategoryAsync`), porque con READ COMMITTED la lectura también espera a la fila bloqueada.
+- **Con las sentencias de D3 directamente** (para comprobar el bloqueo de la sentencia, no el de la comprobación previa):
+  - Desactivación confirmada primero (transacción abierta 6 s): el `INSERT ... WHERE EXISTS (... WITH (UPDLOCK, HOLDLOCK))` esperó unos 5 s e insertó **0 filas**.
+  - Alta confirmada primero (transacción abierta 6 s): el `UPDATE` de `DeactivateAsync` esperó unos 5 s y desactivó **0 filas**. Después, `DELETE /api/categories/{id}` respondió 409.
+- En ningún caso quedó un producto activo en una categoría desactivada.
+
+### `specs/api-errors`
+
+- `GET /api/categories?pageSize=diez` sigue respondiendo `El parámetro 'pageSize' debe ser un número entero.`, con `PaginationRequest` resuelto por `ActionParameterTypeResolver`.
+
+- **`dotnet build` / `dotnet test`:** 0 advertencias, 0 errores; 208/208 pruebas correctas.
+- **Aprendí:** la prueba con `sqlcmd` contra la API no bastaba para validar D3, porque la espera ocurría antes de llegar a la sentencia. Ejecutar las dos sentencias directamente, en los dos órdenes, fue lo que demostró que el `UPDLOCK, HOLDLOCK` las serializa.
+
+## E4 · Productos — tarea 9.2 (revisión de Clean Code y cobertura)
+- **Fecha:** 10-11-2026
+- **Cambio de OpenSpec:** `add-products`
+- **Alcance revisado:** `git diff -- src tests` (5 archivos modificados) más los 45 archivos nuevos de `src` y `tests`.
+- **Revisión** (subagente `code-reviewer`, con un contexto nuevo, sin el de la sesión que implementó): **aprobada**, 0 hallazgos bloqueantes y 6 menores. La revisión confirma la separación CQRS y que las justificaciones de la regla 7 de `docs/assumptions.md` se sostienen.
+  1. **Corregido, reglas 3 y 4:** `UpdateProductHandler` ocultaba el diagnóstico del rechazo detrás de `UpdateAsync(...) ?? await ThrowFor...()`, que declaraba `Task<Product>` sin devolver nunca nada. Ahora `UpdateWhileCategoryIsActiveAsync` guarda el resultado, diagnostica si es `null` y lo devuelve si no.
+  2. **Corregido, regla 3:** `LikePattern.Contains` se leía como un predicado. Se renombró a `LikePattern.ForContains`, también en `design.md` y `tasks.md`.
+  3. **Corregido, legibilidad:** el `new ProductSnapshot(...)` de `Product.Create` y de tres pruebas usa ahora argumentos con nombre.
+  4. **Corregido con TDD, fallo real:** `ActionParameterTypeResolver` podía convertir un 400 en 500 (`AmbiguousMatchException` si dos propiedades solo difieren en mayúsculas). Además buscaba propiedades en parámetros simples (`string.Length` se habría tomado como entero) y no aceptaba claves con prefijo (`request.categoryId`). Primero se escribieron las 5 pruebas de `ActionParameterTypeResolverTests`: 3 fallaron. Después se corrigió: búsqueda sin ambigüedad, solo en parámetros complejos y quitando el prefijo. En vivo, tras `docker compose up -d --build --no-deps api`, `categoryId=abc`, `pageSize=diez` (categorías), `search=50%` y el `PUT` correcto y con categoría inexistente dan lo mismo que en la tarea 9.1.
+  5. **Aceptado:** `ProductDeletion` vive en Application y `ProductChanges` en Domain (ver `docs/assumptions.md`).
+  6. **Aceptado como deuda:** los escenarios que dependen de SQL Server (orden, filtros, búsqueda, collation, concurrencia) no tienen prueba automática. D11 lo decide así y la tarea 9.1 los verificó todos con Docker. Queda propuesto un proyecto de pruebas de integración para un cambio futuro, que exigirá aprobar un paquete nuevo.
+- **`dotnet build` / `dotnet test`:** 0 advertencias, 0 errores; 213/213 pruebas correctas.
+- **Cobertura con Coverlet** (`dotnet test --collect:"XPlat Code Coverage"`, formato Cobertura):
+
+  | Ensamblado | Líneas | Ramas |
+  |---|---|---|
+  | `Inventory.Domain` | 100,0 % | 96,2 % |
+  | `Inventory.Application` | 100,0 % | 100,0 % |
+  | `Inventory.Api` | 73,9 % | 86,0 % |
+  | `Inventory.Infrastructure` | 7,7 % | 11,1 % |
+  | **Total** | **65,9 % (681/1033)** | **72,6 %** |
+
+  Lo que queda sin cubrir es composición o persistencia: `Program`, las extensiones `AddPersistence`, `AddCategories` y `AddProducts`, `ConfigureSwaggerGenOptions`, y los repositorios Dapper y EF Core. Los repositorios se verificaron con Docker en la tarea 9.1. `LikePattern`, que es la única lógica propia de Infrastructure, está cubierta al 100 %.
+- **Aprendí:** el resolutor de tipos funcionaba en todos los casos de la spec, pero la revisión encontró tres entradas que la spec no cubre y que podían dar un 500 o un mensaje equivocado. Una prueba por cada entrada rara salió más barata que razonar sobre todas.

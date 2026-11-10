@@ -18,15 +18,15 @@
 ## Reglas
 | ID | Regla | Tipo | Respuesta ante incumplimiento |
 |---|---|---|---|
-| BR-01 | El SKU es obligatorio, único (sin distinguir mayúsculas), se recorta y tiene máximo 50 caracteres | 400 si falta, 409 si ya existe |
-| BR-02 | El nombre del producto es obligatorio (máximo 200 caracteres) | 400 |
+| BR-01 | El SKU es obligatorio, se recorta y tiene máximo 50 caracteres. Es único entre todos los productos, también los borrados, sin distinguir mayúsculas: el SKU de un producto borrado no se reutiliza. No se puede modificar | 400 si falta, 409 si ya existe |
+| BR-02 | El nombre del producto se recorta, es obligatorio y tiene máximo 200 caracteres. No tiene que ser único | 400 |
 | BR-03 | Un producto debe pertenecer a una categoría que exista y esté activa |  400 |
 | BR-04 | El nombre de categoría se recorta, es obligatorio, tiene máximo 100 caracteres y es único entre las categorías activas, sin distinguir mayúsculas. El nombre de una categoría desactivada se puede reutilizar | 400 o 409 |
 | BR-05 | Eliminar una categoría es lógico (`IsActive = false`) y solo se permite si no tiene productos activos; los productos inactivos no lo impiden. Su nombre queda libre para otra categoría | 409 si tiene productos activos, 404 si no existe o ya está desactivada |
-| BR-06 | Eliminar un producto es lógico (`IsActive = false`) y conserva sus movimientos | 404 si ya no está activo |
-| BR-07 | Un producto nuevo empieza con stock 0; el stock solo cambia con movimientos | El campo se ignora |
+| BR-06 | Eliminar un producto es lógico (`IsActive = false`) y conserva sus movimientos. Se permite aunque tenga stock: ese stock queda congelado | 404 si ya no está activo |
+| BR-07 | Un producto nuevo empieza con stock 0; el stock solo cambia con movimientos. El alta y la edición ignoran `stockQuantity` | El campo se ignora |
 | BR-08 | Un proveedor tiene nombre (máximo 200) y NIT (máximo 30) obligatorios; el NIT es único | 400 o 409 |
-| BR-09 | Un proveedor se desactiva, no se elimina. Un proveedor inactivo no se puede asociar ni usar en precios o entradas | 400 |
+| BR-09 | Un proveedor se desactiva, no se elimina. Un proveedor inactivo no se puede asociar ni usar en entradas | 400 |
 | BR-10 | Un producto puede tener varios proveedores y un proveedor varios productos; la pareja (producto, proveedor) es única | 409 |
 | BR-11 | Un movimiento es Entry o Exit, con cantidad entera mayor que 0, sobre un producto activo | 400 o 404 |
 | BR-12 | Una salida no puede superar el stock disponible; el stock nunca es negativo | 409 |
