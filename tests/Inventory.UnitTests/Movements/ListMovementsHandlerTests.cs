@@ -63,6 +63,6 @@ public sealed class ListMovementsHandlerTests
 
     private static MovementDto CreateMovement()
     {
-        return new MovementDto(Guid.NewGuid(), ProductId, "Entry", 5, 5, null, FakeClock.FixedUtcNow, "3f2a9c1e-0000-4000-8000-000000000001");
+        return new MovementDto(Guid.NewGuid(), ProductId, null, "Entry", 5, 5, null, FakeClock.FixedUtcNow, "3f2a9c1e-0000-4000-8000-000000000001");
     }
 }

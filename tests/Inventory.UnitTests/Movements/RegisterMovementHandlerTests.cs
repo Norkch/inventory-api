@@ -68,6 +68,33 @@ public sealed class RegisterMovementHandlerTests
         Assert.Empty(_writeRepository.Received);
     }
 
+    [Fact]
+    public async Task BR16_Registers_EntryWithItsSupplier()
+    {
+        var supplierId = Guid.NewGuid();
+        var command = CreateCommand("Entry", 3, null) with { SupplierId = supplierId };
+        var movement = await CreateHandler().HandleAsync(command, CancellationToken.None);
+        Assert.Equal(supplierId, Assert.Single(_writeRepository.Received).SupplierId);
+        Assert.Equal(supplierId, movement.SupplierId);
+    }
+
+    [Fact]
+    public async Task BR16_Rejects_SupplierThatIsNotActiveOrNotLinked()
+    {
+        _writeRepository.Status = MovementRegistrationStatus.SupplierNotAvailable;
+        var command = CreateCommand("Entry", 3, null) with { SupplierId = Guid.NewGuid() };
+        var exception = await Assert.ThrowsAsync<ValidationException>(() => CreateHandler().HandleAsync(command, CancellationToken.None));
+        Assert.Equal(MovementMessages.SupplierNotAvailable, exception.Message);
+    }
+
+    [Fact]
+    public async Task BR16_Rejects_ExitWithSupplier_WithoutCallingTheRepository()
+    {
+        var command = CreateCommand("Exit", 1, null) with { SupplierId = Guid.NewGuid() };
+        await Assert.ThrowsAsync<ValidationException>(() => CreateHandler().HandleAsync(command, CancellationToken.None));
+        Assert.Empty(_writeRepository.Received);
+    }
+
     private RegisterMovementHandler CreateHandler()
     {
         return new RegisterMovementHandler(_writeRepository, new FakeClock());
@@ -75,6 +102,6 @@ public sealed class RegisterMovementHandlerTests
 
     private static RegisterMovementCommand CreateCommand(string? type, int? quantity, string? reason)
     {
-        return new RegisterMovementCommand(ProductId, type, quantity, reason, new MovementRegistrant(Subject));
+        return new RegisterMovementCommand(ProductId, type, quantity, reason, null, new MovementRegistrant(Subject));
     }
 }

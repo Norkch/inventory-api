@@ -251,3 +251,95 @@ La revisión de Clean Code de la tarea 8.2 dejó tres hallazgos menores. Se acep
 
   `MovementWriteRepository` y `MovementReadRepository` no tienen prueba unitaria. Es la misma deuda que ya registró `add-products`: un proyecto de pruebas de integración contra SQL Server exige un paquete nuevo, que hay que aprobar antes.
 - **Prueba BR-15 eliminada:** `BR15_Rejects_ExitThatLostTheRaceForTheStock` era idéntica a la de BR-12 y su nombre prometía una concurrencia que no probaba. BR-15 la garantiza el `UPDATE` condicional en la base, no el handler, así que su verificación es la de la tarea 8.1 (5 rondas de salidas simultáneas, siempre `[201, 409]`).
+
+## add-suppliers (2026-11-10)
+
+### APIs de .NET 6, ASP.NET Core 6, Dapper 2.1 y EF Core 6 confirmadas para proveedores (tarea 1.1)
+
+- **Aviso sobre la versión:** Context7 (`/dotnet/docs`, `/dotnet/aspnetcore.docs` y `/dotnet/entityframework.docs`) no separa la documentación por versión y sirve la rama `main`, de versiones mayores posteriores a la 6. Se ignoró lo que es propio de esas versiones; en particular, `[GeneratedRegex]` (generadores de código fuente de .NET 7 y propiedades parciales de .NET 9), que **no** se usa. Cada firma se comprobó en los XML de `Microsoft.NETCore.App.Ref` `6.0.36` y `Microsoft.AspNetCore.App.Ref` `6.0.36` (`ref/net6.0`), de `microsoft.entityframeworkcore` `6.0.36` (`lib/net6.0`) y de `dapper` `2.1.89` (`lib/netstandard2.0`).
+- **Regex en .NET 6 (D2):** `Regex(string pattern, RegexOptions options, TimeSpan matchTimeout)` existe, igual que `RegexOptions.CultureInvariant` y `RegexMatchTimeoutException`. El correo y el teléfono se validan con instancias `static readonly` creadas con ese constructor y un tiempo máximo. Context7 muestra ese patrón como el anterior a los generadores de .NET 7. No se usa `RegexOptions.Compiled`, porque los patrones son cortos.
+- **ASP.NET Core 6 (D8):**
+  - Una plantilla de ruta de una acción que empieza por `/` no se combina con la del controlador (Context7, `mvc/controllers/routing.md`). `HttpGetAttribute(string template)` existe en el XML 6.0.36. Así, `GET /api/suppliers/{supplierId:guid}/products` puede vivir en `ProductSuppliersController`.
+  - `ControllerBase.CreatedAtAction(string actionName, object routeValues, object value)` existe en el XML 6.0.36. Responde 201 y construye `Location` con la acción y los valores de ruta, que pueden ser dos (`productId` y `supplierId`).
+- **Dapper 2.1.89 (D4, D6):** `QuerySingleOrDefaultAsync<T>(IDbConnection, CommandDefinition)` devuelve la única fila o `default` si no hay ninguna. Sirve para el `UPDATE ... OUTPUT INSERTED.*` de la edición (`null` da 404) y para leer los nombres tras el `INSERT ... SELECT ... WHERE EXISTS` de la asociación. `CommandDefinition` acepta la transacción y el `CancellationToken`, como en movimientos.
+- **EF Core 6.0.36 (D7):**
+  - `AsNoTracking<T>(IQueryable<T>)` y `CountAsync<T>(IQueryable<T>, CancellationToken)` existen en el XML.
+  - Context7 documenta `join ... on ... equals ...` como `INNER JOIN` en el servidor. Las tres tablas se unen así, sin propiedades de navegación, porque no hay llaves foráneas.
+  - Context7 recomienda un orden totalmente único con `Skip`/`Take` (`OrderBy` más `ThenBy` por un id). Es lo que ya piden las specs para los tres listados.
+
+### Longitud antes que formato en el correo y el teléfono (tarea 3.1, D2)
+
+- `SupplierRules.ValidateEmail` y `ValidatePhone` comprueban primero la longitud y después el formato. Un correo o un teléfono que supera el máximo recibe el mensaje de longitud aunque además tenga un formato inválido. Así lo piden los escenarios "Correo de 201 caracteres" y "Teléfono de 31 caracteres".
+- El teléfono incumple el formato en dos casos, que dan el mismo mensaje: si tiene caracteres distintos de un `+` inicial, dígitos, espacios y guiones, o si no tiene entre 7 y 15 dígitos. Los dígitos se cuentan con `char.IsDigit`. Un dígito Unicode que no sea `0-9` también cuenta, pero el patrón ya rechaza ese teléfono, así que el resultado no cambia.
+- Las expresiones regulares se evalúan con un tiempo máximo de 100 ms. Los patrones no tienen cuantificadores anidados, así que una `RegexMatchTimeoutException` no debería ocurrir. Si ocurriera, el middleware la respondería como un 500.
+
+### `Supplier` con `SupplierDraft`, `SupplierSnapshot`, `SupplierEdit` y `SupplierChanges` (tarea 3.2, regla 7)
+
+- `Supplier.Create` recibe un `SupplierDraft` y `Supplier.Restore` un `SupplierSnapshot`, igual que `InventoryMovement.Create(MovementDraft)` y `Product.Restore(ProductSnapshot)`. `Restore` no estaba en la tarea, pero lo necesita el `UPDATE ... OUTPUT` de la edición (tarea 5.1).
+- La edición usa la variante inmutable que admite la tarea: `SupplierChanges.Create(SupplierEdit)` valida nombre, correo y teléfono, y devuelve un objeto sin `Nit` ni `CreatedAtUtc`. El repositorio aplica esos cambios en el `UPDATE`, como hace `ProductChanges`. No existe un `Supplier.ApplyChanges`, porque la entidad nunca se modifica en memoria.
+- `SupplierEdit` es un tipo que no aparece en D1. Agrupa los datos de entrada de la edición para no pasar cinco valores sueltos.
+- Las pruebas de `SupplierChanges` van en `SupplierChangesTests.cs`, no en `SupplierTests.cs`. Así se sigue la convención de `ProductChangesTests` (una clase de prueba por clase).
+
+### Puertos de proveedores (tarea 4.1)
+
+- `DeactivateAsync` recibe un `SupplierDeactivation` (id y fecha). Así el repositorio fija `UpdatedAtUtc` con la hora de `IClock` (D6), igual que `ProductDeletion` en el borrado de productos.
+- `CreateAsync` no devuelve nada. Si el índice único rechaza el NIT en una carrera (2601/2627), el repositorio lanza `ConflictException` con `SupplierMessages.NitAlreadyExists` (D3). `IProductWriteRepository.AddAsync`, en cambio, devuelve `bool`, porque su `INSERT` también puede fallar si la categoría no está activa. El alta de un proveedor no tiene esa segunda condición.
+- `SupplierListCriteria` solo lleva el `PageRequest`, porque el listado no tiene filtros. Existe para que el puerto reciba un objeto de criterio, como los demás listados (regla 7).
+- `FakeSupplierWriteRepository.CreateException` permite simular la carrera del NIT en las pruebas del handler (tarea 4.2).
+
+### `Created` con la ruta en lugar de `CreatedAtAction` (tarea 6.1, D8)
+
+- D8 proponía `CreatedAtAction` hacia `GET {id}`. `SuppliersController.Create` usa en cambio `Created($"/api/suppliers/{id}", dto)`, igual que `ProductsController` y `CategoriesController`. El resultado HTTP es el mismo (201 con `Location: /api/suppliers/{id}`). La diferencia es que la prueba unitaria puede comprobar `Location` sin enrutamiento: `CreatedAtActionResult` solo calcula la URL cuando se ejecuta dentro de la canalización de MVC.
+- La lista de proveedores reutiliza `PaginationRequest`, con un método nuevo `ToListSuppliersQuery`, como hacen categorías y movimientos.
+- Hasta que la tarea 6.2 no registre `AddSuppliers`, el controlador existe pero no tiene sus handlers en el contenedor. Una petición a `/api/suppliers` en ese estado respondería 500. No se despliega entre las dos tareas.
+
+### Validación de la asociación (tarea 7.1)
+
+- `ProductSupplierRules.ValidateSupplierId` trata `Guid.Empty` como ausente, igual que `ProductRules.ValidateCategoryId`, y responde `El proveedor es obligatorio.`
+- `ProductSupplier.Create` valida `supplierId` antes que `supplierSku`. Las dos son reglas de formato (el primer paso del orden de errores de la spec), así que el orden entre ellas solo decide qué mensaje sale cuando fallan las dos.
+- El mensaje de longitud de `supplierSku` es `El código del producto en el proveedor no puede superar los 50 caracteres.`
+- `ProductSupplier` no tiene `Restore`, porque la asociación nunca se edita: el alta devuelve el DTO del puerto (D4) y las lecturas usan EF Core.
+
+### Puertos de asociaciones (tarea 7.2)
+
+- `FindVisibleAsync` recibe un `ProductSupplierPair` (producto y proveedor), y los dos listados reciben `ProductSuppliersCriteria` y `SupplierProductsCriteria`. Así se evita pasar ids sueltos (regla 7).
+- `ProductSupplierLinkResult` sigue el patrón de `MovementRegistrationResult`: un estado y el DTO cuando el estado es `Linked`. El puerto devuelve el DTO, con los nombres del producto y del proveedor, para que el handler de comando no tenga que usar el puerto de lectura (D4).
+- Mensajes: `El proveedor indicado no existe o no está activo.` (400), `El proveedor ya está asociado al producto.` (409) y `El proveedor no está asociado al producto.` (404 de la pareja). El 404 de un producto o un proveedor no activo en la ruta de un listado reutiliza `ProductMessages.ActiveProductNotFound` y `SupplierMessages.ActiveSupplierNotFound`.
+
+### Alta de la asociación en un solo lote (tarea 8.1, D4)
+
+- `ProductSupplierWriteRepository.LinkAsync` envía en un solo comando el `INSERT ... SELECT ... WHERE EXISTS` y el `SELECT` que lee la asociación con los nombres. El `INSERT` no devuelve ningún conjunto de resultados, así que `QuerySingleOrDefaultAsync<ProductSupplierDto>` lee el del `SELECT`. Si viene vacío, no se insertó nada. Así se evita una segunda ida a la base y no hace falta un `OUTPUT`, que no puede unir con `Products` ni `Suppliers`.
+- El `INSERT` se ejecuta en modo autocommit. Por eso el `UPDLOCK, HOLDLOCK` sobre la fila del proveedor dura lo que dura la sentencia, y basta para que una desactivación simultánea espere o se vea (BR-09).
+- El `SELECT` posterior no filtra por `IsActive`. Si el producto o el proveedor se desactivan justo después del `INSERT`, la respuesta sigue siendo 201 con sus nombres, que es correcto para el instante del alta.
+- Cuando no se inserta nada, el diagnóstico comprueba el producto: si no está activo es 404 y, si lo está, 400 por el proveedor. Esa lectura no se bloquea, por la misma razón que en D3 de `add-inventory-movements`: un cambio posterior solo altera el diagnóstico, y los dos resultados son correctos para ese instante.
+- Que Dapper asigne bien las columnas al constructor de `ProductSupplierDto` y que el lote devuelva la fila se comprueba con SQL Server en la tarea 11.1.
+
+### `createdAtUtc` sin `Z` en el 201 de la asociación (tarea 8.4)
+
+- Al revés que en el resto de las altas, la respuesta 201 de `POST /api/products/{productId}/suppliers` no se construye en memoria: sale del `SELECT` que lee la asociación en el mismo lote (D4). Por eso `createdAtUtc` llega sin sufijo `Z`, igual que en las lecturas, porque la columna es `datetime2`. El valor sigue estando en UTC. Se comprobó en vivo en la tarea 8.3.
+
+### Proveedor en las entradas (tareas 9.1 a 9.4, D5)
+
+- **El `UPDLOCK` serializa las entradas con el mismo proveedor:** la comprobación del proveedor toma `UPDLOCK, HOLDLOCK` sobre su fila y lo mantiene hasta el `COMMIT`.
+  - Dos entradas simultáneas que indican el **mismo** proveedor se esperan una a otra, aunque sean de productos distintos. Las altas de asociación con ese proveedor también esperan.
+  - Se aceptó por coherencia con el bloqueo de la categoría en productos, porque la transacción es corta (tres o cuatro sentencias).
+  - Si el volumen lo pidiera, un `HOLDLOCK` sin `UPDLOCK` (bloqueo compartido) dejaría las entradas en paralelo y seguiría frenando la desactivación.
+- **El NIT solo se recorta:** `900.123.456-7` y `900123456-7` son NIT distintos. La propuesta no pide normalizarlo.
+- **Un `supplierId` igual a `Guid.Empty` no es ausente** en un movimiento, a diferencia de la asociación. En una entrada responde 400, porque ese proveedor no existe, y en una salida responde 400 por llevar proveedor.
+- **`FakeMovementWriteRepository` no cambió:** reconstruye el movimiento con `WithStockAfter`, que ya conserva `SupplierId`.
+- La comprobación del proveedor se probó en vivo en la tarea 9.3 (entrada con un proveedor asociado, no asociado o desactivado; salida con `supplierId`; producto borrado). La concurrencia con la desactivación se verifica en la tarea 11.1.
+
+### Revisión de Clean Code de `add-suppliers` (tarea 10.1)
+
+La revisión se hizo con el subagente `code-reviewer`, en un contexto distinto del de la implementación. El veredicto fue **aprobado**: 0 hallazgos bloqueantes y 6 menores.
+
+- **Corregidos:**
+  1. `LockSupplierOrDiagnoseAsync` pasa a llamarse `LockSupplierAndFindRejectionAsync`, porque bloquea el proveedor y devuelve el posible rechazo.
+  2. `BR09_Create_Rejects_MissingSupplier` pasa a llamarse `BR09_Create_Rejects_MissingSupplier_BeforeValidatingTheSku`, porque también prueba ese orden.
+  3. El constructor privado de `ProductSupplier` recibe un único `ProductSupplierDraft` ya validado (`draft with { ... }`), como `SupplierChanges` (regla 7).
+  5. `ProductSuppliersController` construye `Location` con la constante `LinkLocationFormat` y no repite la ruta a mano.
+  6. En `InventoryMovementTests`, el auxiliar `CreateDraft` vuelve al final de la clase.
+- **Aceptado (regla 7):** `MovementRules.ValidateSupplier(MovementType type, Guid? supplierId)` recibe dos valores sueltos. `type` ya viene validado por `ValidateType`, y pasar el `MovementDraft` obligaría a validarlo otra vez o a recibir el tipo sin validar. Es el mismo motivo por el que `PageRequest.Create` recibe valores sueltos.
+- **Observaciones que no se corrigen en este cambio:**
+  - `CalculateOffset`, `IsUniqueViolation` y las constantes 2601/2627 se repiten en varios repositorios. Es un patrón previo a este cambio; extraerlos a un helper común sería un cambio de refactorización aparte.
+  - Los escenarios que dependen de SQL Server o de la canalización HTTP (orden de los listados, concurrencia, 405, `supplierId` que no es un GUID) se verifican a mano en la tarea 11.1. Es la misma deuda que en los cambios anteriores.

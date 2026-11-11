@@ -577,6 +577,274 @@ Borrado lógico (BR-06): el producto pasa a inactivo y la fila se conserva.
 - **El SKU no se libera** (ver arriba).
 - Borrar el único producto activo de una categoría permite desactivar después esa categoría (BR-05).
 
+## Proveedores (`add-suppliers`)
+
+Los proveedores se crean activos y se desactivan, nunca se borran (BR-09). Un proveedor desactivado es invisible para la API y no se puede reactivar.
+
+### Endpoints
+
+| Método y ruta | Scope exigido | Éxito | Errores con ProblemDetails | Sin token o token inválido | Token sin el scope |
+|---|---|---|---|---|---|
+| `POST /api/suppliers` | `inventory.write` | 201 | 400, 409 | 401 | 403 |
+| `GET /api/suppliers?page&pageSize` | `inventory.read` | 200 | 400 | 401 | 403 |
+| `GET /api/suppliers/{id}` | `inventory.read` | 200 | 404 | 401 | 403 |
+| `PUT /api/suppliers/{id}` | `inventory.write` | 200 | 400, 404 | 401 | 403 |
+| `DELETE /api/suppliers/{id}` | `inventory.write` | 204 | 404 | 401 | 403 |
+
+- 401 y 403 llegan con el cuerpo vacío, igual que en categorías.
+- `{id}` solo coincide con un GUID (`{id:guid}`). Cualquier otro valor responde 404 con el cuerpo vacío.
+
+### Representación de un proveedor
+
+La misma en todas las respuestas (201, 200 del `PUT`, `GET` por id y cada elemento del listado):
+
+```json
+{
+  "id": "8c0e4f2a-1b3d-4e5f-9a7b-6c5d4e3f2a1b",
+  "name": "Ferretería Andina",
+  "nit": "900123456-7",
+  "email": "ventas@andina.com",
+  "phone": "+57 300 123 4567",
+  "createdAtUtc": "2026-11-10T09:30:00.1234567Z",
+  "updatedAtUtc": null
+}
+```
+
+| Campo | Tipo | Contenido |
+|---|---|---|
+| `id` | GUID | Lo genera la API al crear el proveedor |
+| `name` | string | Nombre recortado, de 1 a 200 caracteres |
+| `nit` | string | NIT recortado, de 1 a 30 caracteres. No cambia nunca |
+| `email` | string o `null` | Correo recortado, tal como se envió, o `null` |
+| `phone` | string o `null` | Teléfono recortado, tal como se envió, o `null` |
+| `createdAtUtc` | fecha y hora ISO 8601 | Momento del alta, en UTC |
+| `updatedAtUtc` | fecha y hora ISO 8601 o `null` | Última edición o desactivación, en UTC; `null` si nunca se ha editado |
+
+Como en productos, las respuestas solo devuelven proveedores activos y no incluyen `isActive`. La respuesta 201 escribe `createdAtUtc` con el sufijo `Z`, y las lecturas y la respuesta del `PUT` sin sufijo.
+
+### `POST /api/suppliers`
+
+Crea un proveedor activo. Cuerpo de la petición:
+
+```json
+{
+  "name": "Ferretería Andina",
+  "nit": "900123456-7",
+  "email": "ventas@andina.com",
+  "phone": "+57 300 123 4567"
+}
+```
+
+| Campo | Obligatorio | Reglas |
+|---|---|---|
+| `name` | Sí | BR-08. Se recorta; no puede quedar vacío ni superar los 200 caracteres. No tiene que ser único |
+| `nit` | Sí | BR-08. Se recorta; no puede quedar vacío ni superar los 30 caracteres. Único entre **todos** los proveedores, también los desactivados, sin distinguir mayúsculas |
+| `email` | No | Se recorta. Vacío o solo con espacios se guarda como `null`. Máximo 200 caracteres. Debe tener la forma `algo@dominio.ext`: sin espacios, una sola `@` y al menos un punto después de ella. Se guarda tal cual, sin cambiar mayúsculas |
+| `phone` | No | Se recorta. Vacío o solo con espacios se guarda como `null`. Máximo 30 caracteres. Solo un `+` inicial opcional, dígitos, espacios y guiones, con entre 7 y 15 dígitos. Se guarda tal cual |
+
+Respuesta 201 con el proveedor (ver la [representación](#representación-de-un-proveedor)) y la cabecera `Location: /api/suppliers/{id}`.
+
+| Cuerpo enviado | Respuesta |
+|---|---|
+| Proveedor válido | 201 con `updatedAtUtc` `null` |
+| Solo `name` y `nit` | 201 con `email` y `phone` `null` |
+| `"nit": "  900123456-7  "` | 201 con `"nit": "900123456-7"` |
+| `"email": "  Juan@Mail.com  "` | 201 con `"email": "Juan@Mail.com"` |
+| Sin `name`, o vacío | 400: `El nombre del proveedor es obligatorio.` |
+| Nombre de 201 caracteres | 400: `El nombre del proveedor no puede superar los 200 caracteres.` |
+| Sin `nit`, o vacío | 400: `El NIT del proveedor es obligatorio.` |
+| NIT de 31 caracteres | 400: `El NIT del proveedor no puede superar los 30 caracteres.` |
+| `"email": "juan@mail"`, `"juan.mail.com"`, `"juan perez@mail.com"` o `"juan@@mail.com"` | 400: `El correo del proveedor no tiene un formato válido.` |
+| Correo de 201 caracteres | 400: `El correo del proveedor no puede superar los 200 caracteres.` |
+| `"phone": "123-456"` (6 dígitos), `"1234567890123456"` (16), `"300 ABC 4567"` o `"300+1234567"` | 400: `El teléfono del proveedor no tiene un formato válido.` |
+| Teléfono de 31 caracteres | 400: `El teléfono del proveedor no puede superar los 30 caracteres.` |
+| NIT de otro proveedor, activo o desactivado | 409: `Ya existe un proveedor con el NIT '900123456-7'.` |
+
+#### Orden de los errores
+
+Si un alta incumple varias reglas, se responde solo el primer error en este orden:
+
+1. Formato de `name`, `nit`, `email` y `phone`, en ese orden (400). Dentro del correo y del teléfono, la longitud se comprueba antes que el formato.
+2. NIT repetido (409).
+
+Por ejemplo, un NIT repetido con `"email": "juan@mail"` responde 400 por el correo.
+
+#### NIT reservado para siempre (BR-08)
+
+- El NIT se compara después de recortarlo y sin distinguir mayúsculas: `"abc-123"` choca con `"ABC-123"`. No se quitan puntos ni guiones: `900.123.456-7` y `900123456-7` son NIT distintos.
+- Un NIT **no se libera** al desactivar el proveedor. Crear otro con el NIT de uno desactivado responde 409 con el mismo mensaje, que no dice si el otro está desactivado.
+- Si dos peticiones crean a la vez un proveedor con el mismo NIT, una responde 201 y la otra 409. Lo garantiza el índice único `UX_Suppliers_Nit`, sin filtro.
+
+### `GET /api/suppliers`
+
+Lista los proveedores activos, paginados (BR-18) y ordenados por `name` y, a igualdad, por `id`. No admite búsqueda ni filtros.
+
+| Parámetro de consulta | Tipo | Por defecto | Reglas |
+|---|---|---|---|
+| `page` | entero | 1 | Desde 1 |
+| `pageSize` | entero | 20 | De 1 a 100 |
+
+La respuesta tiene la misma forma que el listado de categorías (`{ items, page, pageSize, totalCount, totalPages }`), y cada elemento de `items` es un proveedor completo. Los desactivados no aparecen ni cuentan en `totalCount`. Los errores de `page` y `pageSize` son los mismos que en categorías.
+
+### `GET /api/suppliers/{id}`
+
+Responde 200 con el proveedor activo. Un GUID que no corresponde a ningún proveedor activo, incluido uno desactivado, responde 404 con `No existe un proveedor activo con el id '{id}'.`
+
+### `PUT /api/suppliers/{id}`
+
+Reemplaza los campos editables de un proveedor activo y responde 200 con el proveedor actualizado. Cuerpo:
+
+```json
+{
+  "name": "Andina S.A.S.",
+  "email": "compras@andina.com",
+  "phone": "6011234567"
+}
+```
+
+- `name`, `email` y `phone` siguen las mismas reglas que en el alta.
+- Es un reemplazo completo: un `email` o un `phone` ausente o `null` los deja en `null`.
+- **`nit` se ignora** si viene en el cuerpo, sin validarlo: el NIT no cambia nunca con un `PUT` (BR-08).
+- La respuesta trae `updatedAtUtc` con el momento de la edición. `nit` y `createdAtUtc` no cambian.
+
+| Situación | Respuesta |
+|---|---|
+| Proveedor activo y datos válidos | 200 con el proveedor actualizado |
+| Cuerpo con `"nit": "800000000-1"` o `"nit": ""` | 200; `nit` no cambia |
+| Cuerpo con solo `name` | 200 con `email` y `phone` `null` |
+| `name` vacío u otra regla de formato | 400 con el mensaje de la regla; el proveedor no cambia |
+| Proveedor inexistente o desactivado | 404: `No existe un proveedor activo con el id '{id}'.` |
+
+Si el cuerpo es inválido **y** el proveedor no existe, gana el 400, porque el formato se comprueba antes de buscar el proveedor.
+
+### `DELETE /api/suppliers/{id}`
+
+Desactivación (BR-09): el proveedor pasa a inactivo y la fila se conserva, con `updatedAtUtc` igual al momento de la desactivación.
+
+| Situación | Respuesta |
+|---|---|
+| Proveedor activo, con o sin asociaciones y entradas | 204, sin cuerpo |
+| Proveedor que ya estaba desactivado | 404 |
+| GUID que no corresponde a ningún proveedor | 404 |
+
+- **No hay condiciones previas:** se puede desactivar un proveedor asociado a productos o usado en entradas.
+- **Se conservan sus asociaciones** y los movimientos que lo indican. Las asociaciones dejan de ser visibles.
+- **No se reactiva:** no existe ningún endpoint para volver a activarlo, y su NIT queda reservado (ver arriba).
+- Después de desactivarlo, `GET`, `PUT` y `DELETE` sobre su id responden 404.
+
+## Asociaciones producto-proveedor (`add-suppliers`)
+
+Un producto puede tener varios proveedores y un proveedor varios productos (BR-10). Cada asociación se identifica por la pareja (producto, proveedor) y **no se edita ni se borra**. Crear un producto no le asocia proveedores.
+
+### Endpoints
+
+| Método y ruta | Scope exigido | Éxito | Errores con ProblemDetails | Sin token o token inválido | Token sin el scope |
+|---|---|---|---|---|---|
+| `POST /api/products/{productId}/suppliers` | `inventory.write` | 201 | 400, 404, 409 | 401 | 403 |
+| `GET /api/products/{productId}/suppliers/{supplierId}` | `inventory.read` | 200 | 404 | 401 | 403 |
+| `GET /api/products/{productId}/suppliers?page&pageSize` | `inventory.read` | 200 | 400, 404 | 401 | 403 |
+| `GET /api/suppliers/{supplierId}/products?page&pageSize` | `inventory.read` | 200 | 400, 404 | 401 | 403 |
+
+- 401 y 403 llegan con el cuerpo vacío, igual que en categorías.
+- `{productId}` y `{supplierId}` solo coinciden con un GUID. Cualquier otro valor responde 404 con el cuerpo vacío.
+- **No existen `PUT`, `PATCH` ni `DELETE`.** `PUT` y `DELETE` sobre `/api/products/{productId}/suppliers/{supplierId}` responden 405 y la asociación no cambia.
+
+### Representación de una asociación
+
+La misma en las cuatro respuestas (201, `GET` de la pareja y cada elemento de los dos listados):
+
+```json
+{
+  "productId": "ed3ebe13-2aef-450a-8546-bd4679741842",
+  "productName": "Tornillo 3/8",
+  "supplierId": "13a9832e-d0f3-4e73-8075-bfd69bd44013",
+  "supplierName": "Ferretería Andina",
+  "supplierSku": "FA-778",
+  "createdAtUtc": "2026-11-11T01:07:32.1830097"
+}
+```
+
+| Campo | Tipo | Contenido |
+|---|---|---|
+| `productId` | GUID | Producto de la asociación |
+| `productName` | string | Nombre actual del producto |
+| `supplierId` | GUID | Proveedor de la asociación |
+| `supplierName` | string | Nombre actual del proveedor |
+| `supplierSku` | string o `null` | Código del producto en el catálogo del proveedor, recortado, de 1 a 50 caracteres, o `null` |
+| `createdAtUtc` | fecha y hora ISO 8601 | Momento del alta, en UTC |
+
+`createdAtUtc` se escribe **sin** sufijo `Z` también en el 201, porque la respuesta del alta se lee de la base en la misma operación (ver `docs/assumptions.md`).
+
+### `POST /api/products/{productId}/suppliers`
+
+Asocia un proveedor al producto de la ruta. Cuerpo:
+
+```json
+{
+  "supplierId": "13a9832e-d0f3-4e73-8075-bfd69bd44013",
+  "supplierSku": "FA-778"
+}
+```
+
+| Campo | Obligatorio | Reglas |
+|---|---|---|
+| `supplierId` | Sí | BR-09. Debe ser un proveedor activo |
+| `supplierSku` | No | Se recorta. Vacío o solo con espacios se guarda como `null`. Máximo 50 caracteres. No tiene que ser único |
+
+Respuesta 201 con la asociación y la cabecera `Location: /api/products/{productId}/suppliers/{supplierId}`.
+
+| Situación | Respuesta |
+|---|---|
+| Producto y proveedor activos, no asociados | 201 |
+| `"supplierSku": "  FA-778  "` | 201 con `"supplierSku": "FA-778"` |
+| Sin `supplierSku`, o solo con espacios | 201 con `supplierSku` `null` |
+| `supplierSku` de 51 caracteres | 400: `El código del producto en el proveedor no puede superar los 50 caracteres.` |
+| Sin `supplierId` | 400: `El proveedor es obligatorio.` |
+| `"supplierId": "abc"` | 400: `El cuerpo de la petición no es un JSON válido.` |
+| Producto de la ruta inexistente o borrado | 404: `No existe un producto activo con el id '{productId}'.` |
+| Proveedor inexistente o desactivado | 400: `El proveedor indicado no existe o no está activo.` |
+| Pareja ya asociada | 409: `El proveedor ya está asociado al producto.` |
+
+#### Orden de los errores
+
+Si un alta incumple varias reglas, se responde solo el primer error en este orden:
+
+1. Formato de `supplierId` y `supplierSku` (400).
+2. Producto de la ruta inexistente o borrado (404).
+3. Proveedor inexistente o desactivado (400).
+4. Pareja repetida (409).
+
+Por ejemplo, un proveedor desactivado sobre un producto borrado responde 404, y volver a asociar un proveedor que se desactivó después responde 400 por el proveedor, no 409.
+
+#### Proveedor activo también frente a la concurrencia (BR-09, BR-10)
+
+- El alta comprueba el producto y el proveedor en la misma sentencia que inserta la asociación, y bloquea la fila del proveedor. Si a la vez se desactiva ese proveedor, o el alta responde 201 y la desactivación 204, o la desactivación responde 204 y el alta 400. Nunca se crea una asociación con un proveedor ya desactivado.
+- Si dos peticiones asocian a la vez la misma pareja, una responde 201 y la otra 409. Lo garantiza el índice único `UX_ProductSuppliers_Link`.
+
+### Visibilidad
+
+Solo se ven las asociaciones cuyo producto **y** proveedor están activos. Borrar un producto o desactivar un proveedor conserva las filas de sus asociaciones, pero dejan de aparecer en todas las lecturas.
+
+### `GET /api/products/{productId}/suppliers/{supplierId}`
+
+Responde 200 con la asociación. Si la pareja no existe, o si el producto o el proveedor no están activos, responde 404 con `El proveedor no está asociado al producto.`
+
+### `GET /api/products/{productId}/suppliers`
+
+Lista los proveedores activos del producto, paginados (BR-18) y ordenados por `supplierName` y, a igualdad, por `supplierId`.
+
+- `page` y `pageSize` siguen las mismas reglas que en categorías y se comprueban **antes** que el producto.
+- Producto inexistente o borrado: 404 con `No existe un producto activo con el id '{productId}'.`, aunque conserve asociaciones.
+- Producto activo sin proveedores: 200 con `items` vacío.
+
+### `GET /api/suppliers/{supplierId}/products`
+
+Vista inversa: lista los productos activos del proveedor, paginados (BR-18) y ordenados por `productName` y, a igualdad, por `productId`.
+
+- `page` y `pageSize` se comprueban **antes** que el proveedor.
+- Proveedor inexistente o desactivado: 404 con `No existe un proveedor activo con el id '{supplierId}'.`, aunque conserve asociaciones.
+- Proveedor activo sin productos: 200 con `items` vacío.
+
 ## Movimientos de inventario (`add-inventory-movements`)
 
 Los movimientos son el libro inmutable del stock: cada entrada o salida cambia `stockQuantity` del producto y queda registrada para siempre. Los endpoints están anidados bajo el producto, porque cada movimiento pertenece a un único producto.
@@ -600,6 +868,7 @@ La misma en la respuesta 201 y en cada elemento del listado:
 {
   "id": "6c37cac6-82b0-4dee-9421-84f101b7f143",
   "productId": "e927dbd0-7f26-4060-af94-fd93130d45b6",
+  "supplierId": "13a9832e-d0f3-4e73-8075-bfd69bd44013",
   "type": "Entry",
   "quantity": 10,
   "stockAfter": 10,
@@ -613,6 +882,7 @@ La misma en la respuesta 201 y en cada elemento del listado:
 |---|---|---|
 | `id` | GUID | Lo genera la API al registrar el movimiento |
 | `productId` | GUID | Producto al que pertenece |
+| `supplierId` | GUID o `null` | Proveedor de una entrada (BR-16), o `null`. Una salida siempre tiene `null`. Se sigue devolviendo aunque el proveedor se haya desactivado después |
 | `type` | string | Siempre en su forma canónica: `"Entry"` o `"Exit"` |
 | `quantity` | entero | Mayor que 0 |
 | `stockAfter` | entero | `stockQuantity` del producto justo después de aplicar el movimiento |
@@ -632,7 +902,8 @@ Cuerpo de la petición:
 {
   "type": "Entry",
   "quantity": 10,
-  "reason": "Compra inicial"
+  "reason": "Compra inicial",
+  "supplierId": "13a9832e-d0f3-4e73-8075-bfd69bd44013"
 }
 ```
 
@@ -641,8 +912,11 @@ Cuerpo de la petición:
 | `type` | Sí | `Entry` o `Exit` (BR-11). Se recorta y no distingue mayúsculas: `" entry "` es válido y se devuelve como `"Entry"`. Cualquier otro texto, incluidos `"1"` o `"3"`, responde 400 |
 | `quantity` | Sí | Entero mayor que 0 (BR-11) |
 | `reason` | No | Se recorta. Vacío o solo con espacios se guarda como `null`. Máximo 250 caracteres después de recortar |
+| `supplierId` | No | BR-16. Solo en una entrada: el proveedor debe existir, estar activo y estar **asociado al producto**. Ausente o `null`, la entrada no tiene proveedor. En una salida solo se admite ausente o `null` |
 
-Los campos que no son parte del contrato se ignoran sin error: `supplierId` (el proveedor llegará con BR-16), `stockAfter`, `occurredAtUtc`, `registeredBy` y cualquier otro. El autor siempre sale del token, nunca del cuerpo.
+Los campos que no son parte del contrato se ignoran sin error: `stockAfter`, `occurredAtUtc`, `registeredBy` y cualquier otro. El autor siempre sale del token, nunca del cuerpo.
+
+> **BREAKING** (`add-suppliers`): `supplierId` ya **no se ignora**. Una salida que lo traía, antes aceptada con 201, ahora responde 400.
 
 | Situación | Respuesta |
 |---|---|
@@ -654,24 +928,36 @@ Los campos que no son parte del contrato se ignoran sin error: `supplierId` (el 
 | `quantity` igual a 0 o negativa | 400: `La cantidad del movimiento debe ser un entero mayor que 0.` |
 | `reason` de más de 250 caracteres | 400: `El motivo del movimiento no puede superar los 250 caracteres.` |
 | `type` como número JSON (`1`) o `quantity` decimal (`1.5`) | 400: `El cuerpo de la petición no es un JSON válido.` |
+| Entrada con un proveedor asociado y activo | 201 con `supplierId` |
+| Salida con un `supplierId` distinto de `null` | 400: `Una salida no puede indicar proveedor.`; no se registra nada |
+| `"supplierId": "abc"` | 400: `El cuerpo de la petición no es un JSON válido.` |
 | Producto inexistente o borrado | 404: `No existe un producto activo con el id '{productId}'.`; no se registra nada |
+| Entrada con un proveedor inexistente, desactivado o no asociado al producto | 400: `El proveedor indicado no está activo o no está asociado al producto.`; el stock no cambia |
 | Salida mayor que el stock disponible | 409: `El stock disponible del producto es insuficiente para la salida.`; el stock no cambia (BR-12) |
 | Entrada que llevaría el stock por encima de 2147483647 | 409: `La entrada supera el stock máximo permitido para el producto.`; el stock no cambia |
 
 - **El stock nunca es negativo** (BR-12).
 - **Todo o nada** (BR-14): el cambio de stock y el registro del movimiento ocurren en una sola transacción. Si algo falla, el producto conserva su stock y la respuesta es 500 sin detalles.
 - **Salidas simultáneas** (BR-15): si varias salidas del mismo producto llegan a la vez y no hay stock para todas, solo se aceptan las que caben, y las demás reciben 409. Por ejemplo, con stock 5, dos salidas de 4 a la vez: una responde 201 con `stockAfter` 1 y la otra 409.
+- **Proveedor activo también frente a la concurrencia** (BR-09): la entrada bloquea la fila del proveedor dentro de su transacción, antes de cambiar el stock. Si a la vez se desactiva ese proveedor, o la entrada responde 201 y la desactivación 204, o la desactivación responde 204 y la entrada 400. Ningún movimiento usa un proveedor ya desactivado.
 - Registrar un movimiento **no cambia `updatedAtUtc`** del producto, que sigue indicando la última edición del catálogo.
 
 #### Orden de los errores
 
 Si una petición tiene varios problemas, se responde solo el primero, en este orden:
 
-1. Formato del cuerpo: `type`, `quantity` y `reason` (400).
+1. Formato del cuerpo: `type`, `quantity`, `reason` y una salida con `supplierId` (400).
 2. Producto inexistente o borrado (404).
-3. Stock insuficiente o desbordamiento (409).
+3. Proveedor de la entrada inexistente, desactivado o no asociado (400).
+4. Stock insuficiente o desbordamiento (409).
 
-Por ejemplo, `quantity` 0 sobre un producto inexistente responde 400, y una salida excesiva sobre un producto borrado responde 404.
+Ejemplos:
+
+- `quantity` 0 sobre un producto inexistente responde 400.
+- Una salida excesiva sobre un producto borrado responde 404.
+- Una salida con `supplierId` sobre un producto borrado responde 400.
+- Una entrada con un proveedor no asociado sobre un producto borrado responde 404.
+- Una entrada que desbordaría el stock con un proveedor no asociado responde 400.
 
 ### `GET /api/products/{productId}/movements`
 

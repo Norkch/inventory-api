@@ -24,9 +24,16 @@ SELECT CAST(CASE WHEN EXISTS (
     SELECT 1 FROM dbo.Products WHERE Id = @ProductId AND IsActive = 1
 ) THEN 1 ELSE 0 END AS BIT);";
 
+    private const string LockActiveLinkedSupplierSql = @"
+SELECT CAST(CASE WHEN EXISTS (
+    SELECT 1 FROM dbo.Suppliers s WITH (UPDLOCK, HOLDLOCK)
+      JOIN dbo.ProductSuppliers ps ON ps.SupplierId = s.Id AND ps.ProductId = @ProductId
+     WHERE s.Id = @SupplierId AND s.IsActive = 1
+) THEN 1 ELSE 0 END AS BIT);";
+
     private const string InsertMovementSql = @"
 INSERT INTO dbo.InventoryMovements (Id, ProductId, SupplierId, MovementType, Quantity, StockAfter, Reason, OccurredAtUtc, RegisteredBy)
-VALUES (@Id, @ProductId, NULL, @MovementType, @Quantity, @StockAfter, @Reason, @OccurredAtUtc, @RegisteredBy);";
+VALUES (@Id, @ProductId, @SupplierId, @MovementType, @Quantity, @StockAfter, @Reason, @OccurredAtUtc, @RegisteredBy);";
 
     private readonly SqlConnectionFactory _connectionFactory;
 
@@ -42,7 +49,7 @@ VALUES (@Id, @ProductId, NULL, @MovementType, @Quantity, @StockAfter, @Reason, @
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
         try
         {
-            var result = await ApplyStockDeltaAndInsertMovementAsync(movement, transaction, cancellationToken);
+            var result = await RegisterWithinTransactionAsync(movement, transaction, cancellationToken);
             await CommitIfRegisteredAsync(result, transaction, cancellationToken);
 
             return result;
@@ -51,6 +58,35 @@ VALUES (@Id, @ProductId, NULL, @MovementType, @Quantity, @StockAfter, @Reason, @
         {
             return MovementRegistrationResult.Rejected(MovementRegistrationStatus.StockOverflow);
         }
+    }
+
+    private static async Task<MovementRegistrationResult> RegisterWithinTransactionAsync(InventoryMovement movement, DbTransaction transaction, CancellationToken cancellationToken)
+    {
+        var supplierRejection = await LockSupplierAndFindRejectionAsync(movement, transaction, cancellationToken);
+        if (supplierRejection is not null)
+        {
+            return MovementRegistrationResult.Rejected(supplierRejection.Value);
+        }
+
+        return await ApplyStockDeltaAndInsertMovementAsync(movement, transaction, cancellationToken);
+    }
+
+    private static async Task<MovementRegistrationStatus?> LockSupplierAndFindRejectionAsync(InventoryMovement movement, DbTransaction transaction, CancellationToken cancellationToken)
+    {
+        if (movement.SupplierId is null)
+        {
+            return null;
+        }
+        var parameters = new DynamicParameters();
+        parameters.Add("ProductId", movement.ProductId, DbType.Guid);
+        parameters.Add("SupplierId", movement.SupplierId, DbType.Guid);
+        var isSupplierAvailable = await transaction.Connection!.ExecuteScalarAsync<bool>(new CommandDefinition(LockActiveLinkedSupplierSql, parameters, transaction, cancellationToken: cancellationToken));
+        if (isSupplierAvailable)
+        {
+            return null;
+        }
+
+        return await IsProductActiveAsync(movement, transaction, cancellationToken) ? MovementRegistrationStatus.SupplierNotAvailable : MovementRegistrationStatus.ProductNotFound;
     }
 
     private static async Task<MovementRegistrationResult> ApplyStockDeltaAndInsertMovementAsync(InventoryMovement movement, DbTransaction transaction, CancellationToken cancellationToken)
@@ -74,11 +110,17 @@ VALUES (@Id, @ProductId, NULL, @MovementType, @Quantity, @StockAfter, @Reason, @
 
     private static async Task<MovementRegistrationStatus> DiagnoseRejectionAsync(InventoryMovement movement, DbTransaction transaction, CancellationToken cancellationToken)
     {
-        var parameters = new DynamicParameters();
-        parameters.Add("ProductId", movement.ProductId, DbType.Guid);
-        var isActive = await transaction.Connection!.ExecuteScalarAsync<bool>(new CommandDefinition(ExistsActiveProductSql, parameters, transaction, cancellationToken: cancellationToken));
+        var isActive = await IsProductActiveAsync(movement, transaction, cancellationToken);
 
         return isActive ? MovementRegistrationStatus.InsufficientStock : MovementRegistrationStatus.ProductNotFound;
+    }
+
+    private static Task<bool> IsProductActiveAsync(InventoryMovement movement, DbTransaction transaction, CancellationToken cancellationToken)
+    {
+        var parameters = new DynamicParameters();
+        parameters.Add("ProductId", movement.ProductId, DbType.Guid);
+
+        return transaction.Connection!.ExecuteScalarAsync<bool>(new CommandDefinition(ExistsActiveProductSql, parameters, transaction, cancellationToken: cancellationToken));
     }
 
     private static async Task CommitIfRegisteredAsync(MovementRegistrationResult result, DbTransaction transaction, CancellationToken cancellationToken)
@@ -103,6 +145,7 @@ VALUES (@Id, @ProductId, NULL, @MovementType, @Quantity, @StockAfter, @Reason, @
         var parameters = new DynamicParameters();
         parameters.Add("Id", movement.Id, DbType.Guid);
         parameters.Add("ProductId", movement.ProductId, DbType.Guid);
+        parameters.Add("SupplierId", movement.SupplierId, DbType.Guid);
         parameters.Add("MovementType", (byte)movement.Type, DbType.Byte);
         parameters.Add("Quantity", movement.Quantity, DbType.Int32);
         parameters.Add("StockAfter", movement.StockAfter, DbType.Int32);

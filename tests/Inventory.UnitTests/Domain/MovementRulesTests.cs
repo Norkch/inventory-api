@@ -110,4 +110,25 @@ public sealed class MovementRulesTests
         var exception = Assert.Throws<ValidationException>(() => MovementRules.ValidateRegisteredBy(new string('a', 101)));
         Assert.Equal("El autor del movimiento no puede superar los 100 caracteres.", exception.Message);
     }
+
+    [Fact]
+    public void BR16_ValidateSupplier_Rejects_ExitWithSupplier()
+    {
+        var exception = Assert.Throws<ValidationException>(() => MovementRules.ValidateSupplier(MovementType.Exit, Guid.NewGuid()));
+        Assert.Equal("Una salida no puede indicar proveedor.", exception.Message);
+    }
+
+    [Fact]
+    public void BR16_ValidateSupplier_Accepts_ExitWithoutSupplier()
+    {
+        Assert.Null(MovementRules.ValidateSupplier(MovementType.Exit, null));
+    }
+
+    [Fact]
+    public void BR16_ValidateSupplier_Accepts_EntryWithOrWithoutSupplier()
+    {
+        var supplierId = Guid.NewGuid();
+        Assert.Equal(supplierId, MovementRules.ValidateSupplier(MovementType.Entry, supplierId));
+        Assert.Null(MovementRules.ValidateSupplier(MovementType.Entry, null));
+    }
 }

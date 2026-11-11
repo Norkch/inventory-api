@@ -4,6 +4,7 @@ public enum MovementRegistrationStatus
 {
     Registered,
     ProductNotFound,
+    SupplierNotAvailable,
     InsufficientStock,
     StockOverflow
 }

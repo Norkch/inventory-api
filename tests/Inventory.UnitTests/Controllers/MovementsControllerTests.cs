@@ -36,6 +36,17 @@ public class MovementsControllerTests
     }
 
     [Fact]
+    public async Task BR16_Register_PassesTheSupplierOfAnEntry()
+    {
+        var supplierId = Guid.NewGuid();
+        var request = new RegisterMovementRequest { Type = "Entry", Quantity = 2, SupplierId = supplierId };
+        var result = await CreateController().Register(ProductId, request, CancellationToken.None);
+        var movement = Assert.IsType<MovementDto>(Assert.IsType<ObjectResult>(result.Result).Value);
+        Assert.Equal(supplierId, movement.SupplierId);
+        Assert.Equal(supplierId, Assert.Single(_writeRepository.Received).SupplierId);
+    }
+
+    [Fact]
     public async Task Register_TakesTheAuthorFromTheSubClaim()
     {
         var request = new RegisterMovementRequest { Type = "Exit", Quantity = 1 };
@@ -49,7 +60,7 @@ public class MovementsControllerTests
     public async Task BR18_List_ReturnsOkWithThePagedShape()
     {
         _readRepository.ActiveProductIds.Add(ProductId);
-        _readRepository.Movements.Add(new MovementDto(Guid.NewGuid(), ProductId, "Entry", 5, 5, null, FakeClock.FixedUtcNow, Subject));
+        _readRepository.Movements.Add(new MovementDto(Guid.NewGuid(), ProductId, null, "Entry", 5, 5, null, FakeClock.FixedUtcNow, Subject));
         var result = await CreateController().List(ProductId, new PaginationRequest(), CancellationToken.None);
         var ok = Assert.IsType<OkObjectResult>(result.Result);
         var body = JsonSerializer.SerializeToElement(ok.Value, new JsonSerializerOptions(JsonSerializerDefaults.Web));
@@ -90,7 +101,6 @@ public class MovementsControllerTests
     [Theory]
     [InlineData("RegisteredBy")]
     [InlineData("StockAfter")]
-    [InlineData("SupplierId")]
     public void RegisterRequest_HasNoFieldsOutsideTheContract(string propertyName)
     {
         Assert.Null(typeof(RegisterMovementRequest).GetProperty(propertyName));
