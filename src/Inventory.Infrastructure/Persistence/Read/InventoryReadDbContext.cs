@@ -17,6 +17,10 @@ public sealed class InventoryReadDbContext : DbContext
 
     public DbSet<MovementRecord> Movements => Set<MovementRecord>();
 
+    public DbSet<SupplierRecord> Suppliers => Set<SupplierRecord>();
+
+    public DbSet<ProductSupplierRecord> ProductSuppliers => Set<ProductSupplierRecord>();
+
     protected override void OnConfiguring(DbContextOptionsBuilder optionsBuilder)
     {
         optionsBuilder.UseQueryTrackingBehavior(QueryTrackingBehavior.NoTracking);
@@ -31,6 +35,8 @@ public sealed class InventoryReadDbContext : DbContext
         category.Property(record => record.Description).HasMaxLength(Category.DescriptionMaxLength);
         MapProducts(modelBuilder);
         MapMovements(modelBuilder);
+        MapSuppliers(modelBuilder);
+        MapProductSuppliers(modelBuilder);
     }
 
     private static void MapMovements(ModelBuilder modelBuilder)
@@ -50,5 +56,24 @@ public sealed class InventoryReadDbContext : DbContext
         product.Property(record => record.Sku).HasMaxLength(ProductRules.SkuMaxLength).IsRequired();
         product.Property(record => record.Name).HasMaxLength(ProductRules.NameMaxLength).IsRequired();
         product.Property(record => record.Description).HasMaxLength(ProductRules.DescriptionMaxLength);
+    }
+
+    private static void MapSuppliers(ModelBuilder modelBuilder)
+    {
+        var supplier = modelBuilder.Entity<SupplierRecord>();
+        supplier.ToTable("Suppliers", "dbo");
+        supplier.HasKey(record => record.Id);
+        supplier.Property(record => record.Name).HasMaxLength(SupplierRules.NameMaxLength).IsRequired();
+        supplier.Property(record => record.Nit).HasMaxLength(SupplierRules.NitMaxLength).IsRequired();
+        supplier.Property(record => record.Email).HasMaxLength(SupplierRules.EmailMaxLength);
+        supplier.Property(record => record.Phone).HasMaxLength(SupplierRules.PhoneMaxLength);
+    }
+
+    private static void MapProductSuppliers(ModelBuilder modelBuilder)
+    {
+        var link = modelBuilder.Entity<ProductSupplierRecord>();
+        link.ToTable("ProductSuppliers", "dbo");
+        link.HasKey(record => record.Id);
+        link.Property(record => record.SupplierSku).HasMaxLength(ProductSupplierRules.SupplierSkuMaxLength);
     }
 }

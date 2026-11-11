@@ -7,7 +7,7 @@
 - Los identificadores son `UNIQUEIDENTIFIER` generados por la aplicación.
 - Todas las fechas son `DATETIME2` en UTC.
 - Se conservan las restricciones `PRIMARY KEY`, `UNIQUE`, `NOT NULL`, `DEFAULT` y `CHECK`, como última barrera de integridad.
-- Los índices únicos de texto aprovechan la intercalación por defecto de SQL Server, que no distingue mayúsculas. `Categories.Name` y `Products.Sku` la declaran de forma explícita (`SQL_Latin1_General_CP1_CI_AS`) para no depender de la configuración de la instancia.
+- Los índices únicos de texto aprovechan la intercalación por defecto de SQL Server, que no distingue mayúsculas. `Categories.Name`, `Products.Sku` y `Suppliers.Nit` la declaran de forma explícita (`SQL_Latin1_General_CP1_CI_AS`) para no depender de la configuración de la instancia.
 - Los índices filtrados (`WHERE ...`) exigen `QUOTED_IDENTIFIER ON` en las sesiones que modifican la tabla. `db/init.sql` y `Microsoft.Data.SqlClient` lo activan; quien escriba SQL a mano contra esas tablas también debe activarlo.
 - El esquema lo crea `db/init.sql`, idempotente, desde el contenedor `dbinit`. EF Core solo lee.
 
@@ -61,14 +61,16 @@ Eliminar un producto es lógico (`IsActive = 0`, BR-06) y conserva su stock y su
 
 Tabla inmutable: no hay actualización ni eliminación. Cada fila se inserta en la misma transacción que el `UPDATE` de `Products.StockQuantity` (ver la sección de `Products`), así que `StockAfter` coincide siempre con el stock del producto justo después de aplicar ese movimiento.
 
-`SupplierId` queda siempre `NULL` hasta que se implemente BR-16 (proveedor en las entradas). La API ignora un `supplierId` en el cuerpo de la petición.
+`SupplierId` es el proveedor de una entrada (BR-16), o `NULL`. Una salida lo tiene siempre `NULL`, y `CK_InventoryMovements_Supplier` queda como última barrera.
+
+Cuando una entrada indica proveedor, la misma transacción del movimiento, **antes** del `UPDATE` de stock, comprueba que el proveedor está activo y asociado al producto, y bloquea su fila con `UPDLOCK, HOLDLOCK` (D5 del diseño de `add-suppliers`). Así una desactivación simultánea del proveedor espera a que termine la entrada. Desactivar un proveedor después no cambia los movimientos que lo indican.
 
 ### Suppliers
 | Columna | Tipo | Null | Restricción |
 |---|---|---|---|
 | Id | UNIQUEIDENTIFIER | No | PK |
 | Name | NVARCHAR(200) | No | |
-| Nit | NVARCHAR(30) | No | Único |
+| Nit | NVARCHAR(30) `COLLATE SQL_Latin1_General_CP1_CI_AS` | No | Único entre todos los proveedores, también los desactivados, sin distinguir mayúsculas |
 | Email | NVARCHAR(200) | Sí | |
 | Phone | NVARCHAR(30) | Sí | |
 | IsActive | BIT | No | Por defecto 1 |
@@ -93,6 +95,6 @@ Relación muchos a muchos. Único: `(ProductId, SupplierId)`.
 | UX_Products_Sku | Products | Sku, sin filtro | SKU único entre todos los productos, también los borrados |
 | IX_Products_CategoryId | Products | CategoryId (incluye IsActive) | Buscar productos por categoría y comprobar si una categoría tiene productos activos |
 | IX_InventoryMovements_ProductId_OccurredAtUtc | InventoryMovements | ProductId, OccurredAtUtc DESC | Historial por producto |
-| UX_Suppliers_Nit | Suppliers | Nit | NIT único |
+| UX_Suppliers_Nit | Suppliers | Nit, sin filtro | NIT único entre todos los proveedores, también los desactivados |
 | UX_ProductSuppliers_Link | ProductSuppliers | ProductId, SupplierId | Sin asociaciones duplicadas |
 | IX_ProductSuppliers_SupplierId | ProductSuppliers | SupplierId | Productos de un proveedor |

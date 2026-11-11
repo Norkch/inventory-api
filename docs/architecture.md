@@ -24,7 +24,7 @@ Las dependencias de código apuntan solo hacia el dominio.
 ## CQRS
 | Lado | Casos de uso | Puertos | Implementación |
 |---|---|---|---|
-| Comandos (escritura) | CreateCategory, DeleteCategory (desactivación), CreateProduct, UpdateProduct, DeleteProduct (desactivación), RegisterMovement;  CreateSupplier, LinkProductSupplier, UnlinkProductSupplier| `I…WriteRepository` | Dapper |
+| Comandos (escritura) | CreateCategory, DeleteCategory (desactivación), CreateProduct, UpdateProduct, DeleteProduct (desactivación), RegisterMovement;  CreateSupplier, UpdateSupplier, DeactivateSupplier (desactivación), LinkProductSupplier (sin edición ni borrado) | `I…WriteRepository` | Dapper |
 | Consultas (lectura) | GetCategoryById, ListCategories, GetProductById, ListProducts y las demás consultas | `I…ReadRepository` | EF Core con `AsNoTracking` |
 
 Regla: un handler de comando nunca usa un puerto de lectura y un handler de consulta nunca usa uno de escritura. Si un comando necesita comprobar algo (por ejemplo, que el SKU no existe), el puerto de **escritura** expone esa comprobación. La prueba `Architecture/CqrsSeparationTests` lo comprueba por reflexión sobre el ensamblado de Application.
@@ -58,6 +58,27 @@ El dominio valida los productos con `ProductRules`, que usan `Product.Create` (a
 
 El dominio valida los movimientos con `MovementRules`, que usa `InventoryMovement.Create(MovementDraft)`. `MovementsController` no tiene acciones `PUT`, `PATCH` ni `DELETE` (BR-13), y responde el 201 sin `Location`.
 
+### Casos de uso de proveedores (`add-suppliers`)
+| Caso de uso | Tipo | Handler | Puerto | Implementación | Resultado |
+|---|---|---|---|---|---|
+| CreateSupplier | Comando | `CreateSupplierHandler` (`CreateSupplierCommand`) | `ISupplierWriteRepository` + `IClock` | `SupplierWriteRepository` (Dapper, comprobación previa del NIT e `INSERT`; 2601/2627 se traducen a 409) | `SupplierDto`; 400 (BR-08) o 409 si el NIT ya existe, aunque el proveedor esté desactivado |
+| UpdateSupplier | Comando | `UpdateSupplierHandler` (`UpdateSupplierCommand`) | `ISupplierWriteRepository` + `IClock` | `SupplierWriteRepository` (Dapper, `UPDATE ... OUTPUT INSERTED.*` condicional a `IsActive = 1`) | `SupplierDto` actualizado; nunca cambia `Nit`; 400 o 404 |
+| DeactivateSupplier | Comando | `DeactivateSupplierHandler` (`DeactivateSupplierCommand`) | `ISupplierWriteRepository` + `IClock` | `SupplierWriteRepository` (Dapper, `UPDATE` condicional con `UpdatedAtUtc`) | Desactivación (BR-09), conservando asociaciones y movimientos; 404 si no está activo |
+| GetSupplierById | Consulta | `GetSupplierByIdHandler` (`GetSupplierByIdQuery`) | `ISupplierReadRepository` | `SupplierReadRepository` (EF Core) | `SupplierDto` de un proveedor activo; 404 si no hay ninguno |
+| ListSuppliers | Consulta | `ListSuppliersHandler` (`ListSuppliersQuery`) | `ISupplierReadRepository` | `SupplierReadRepository` (EF Core) | `PagedResult<SupplierDto>` con los activos, por `Name` y luego `Id` (BR-18) |
+
+El dominio valida los proveedores con `SupplierRules`, que usan `Supplier.Create(SupplierDraft)` (alta) y `SupplierChanges.Create(SupplierEdit)` (edición, sin NIT). `AddSuppliers` registra sus puertos y handlers.
+
+### Casos de uso de asociaciones (`add-suppliers`)
+| Caso de uso | Tipo | Handler | Puerto | Implementación | Resultado |
+|---|---|---|---|---|---|
+| LinkProductSupplier | Comando | `LinkProductSupplierHandler` (`LinkProductSupplierCommand`) | `IProductSupplierWriteRepository` + `IClock` | `ProductSupplierWriteRepository` (Dapper, un lote con `INSERT ... SELECT ... WHERE EXISTS` y `UPDLOCK, HOLDLOCK` sobre el proveedor, y el `SELECT` de la asociación con los nombres) | `ProductSupplierDto`; el puerto devuelve `ProductSupplierLinkResult` y el handler lo traduce: 404 (`ProductNotFound`), 400 (`SupplierNotAvailable`) y 409 (`AlreadyLinked`, 2601/2627) |
+| GetProductSupplier | Consulta | `GetProductSupplierHandler` (`GetProductSupplierQuery`) | `IProductSupplierReadRepository` | `ProductSupplierReadRepository` (EF Core, `join` con `Products` y `Suppliers` activos) | `ProductSupplierDto` de una pareja visible; 404 si no lo es |
+| ListProductSuppliers | Consulta | `ListProductSuppliersHandler` (`ListProductSuppliersQuery`) | `IProductSupplierReadRepository` | `ProductSupplierReadRepository` (EF Core, `ExistsActiveProductAsync` y listado) | `PagedResult<ProductSupplierDto>` por `SupplierName` y luego `SupplierId` (BR-18); 404 si el producto no está activo |
+| ListSupplierProducts | Consulta | `ListSupplierProductsHandler` (`ListSupplierProductsQuery`) | `IProductSupplierReadRepository` | `ProductSupplierReadRepository` (EF Core, `ExistsActiveSupplierAsync` y listado) | `PagedResult<ProductSupplierDto>` por `ProductName` y luego `ProductId` (BR-18); 404 si el proveedor no está activo |
+
+El dominio valida la asociación con `ProductSupplierRules`, que usa `ProductSupplier.Create(ProductSupplierDraft)`. `ProductSuppliersController` no tiene acciones `PUT`, `PATCH` ni `DELETE`, y declara `GET /api/suppliers/{supplierId}/products` con una ruta absoluta. `AddProductSuppliers` registra sus puertos y handlers.
+
 ### Piezas comunes (`Application/Common`)
 - `PageRequest`: `PageRequest.Create(page, pageSize)` aplica los valores por defecto (1 y 20) y valida los rangos de BR-18. Lanza `ValidationException` con un mensaje en español que nombra `page` o `pageSize`. La reutilizarán todos los listados.
 - `PagedResult<T>`: `Items`, `Page`, `PageSize`, `TotalCount` y `TotalPages` (`ceil(TotalCount / PageSize)`, 0 sin elementos). Conserva `Page` aunque la página esté fuera de rango.
@@ -84,7 +105,7 @@ inventory-api/
 ├── .claude/         (skills/, agents/)
 ├── src/
 │   ├── Inventory.Domain/          Entities/ Enums/ Exceptions/ Guard.cs
-│   ├── Inventory.Application/     Abstractions/ Common/ Security/ Categories/ Products/ Movements/ [Suppliers/]
+│   ├── Inventory.Application/     Abstractions/ Common/ Security/ Categories/ Products/ Movements/ Suppliers/
 │   ├── Inventory.Infrastructure/  Persistence/Write/ Persistence/Read/ Configuration/
 │   └── Inventory.Api/             Controllers/ Contracts/ Middleware/ Authorization/ Configuration/ Program.cs
 └── tests/Inventory.UnitTests/     Fakes/ y una clase de pruebas por handler

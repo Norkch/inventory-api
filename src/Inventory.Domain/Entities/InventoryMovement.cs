@@ -10,6 +10,8 @@ public sealed class InventoryMovement
 
     public Guid ProductId { get; private init; }
 
+    public Guid? SupplierId { get; private init; }
+
     public MovementType Type { get; private init; }
 
     public int Quantity { get; private init; }
@@ -26,12 +28,16 @@ public sealed class InventoryMovement
 
     public static InventoryMovement Create(MovementDraft draft)
     {
+        var type = MovementRules.ValidateType(draft.Type);
+        var quantity = MovementRules.ValidateQuantity(draft.Quantity);
+
         return new InventoryMovement
         {
             Id = Guid.NewGuid(),
             ProductId = draft.ProductId,
-            Type = MovementRules.ValidateType(draft.Type),
-            Quantity = MovementRules.ValidateQuantity(draft.Quantity),
+            SupplierId = MovementRules.ValidateSupplier(type, draft.SupplierId),
+            Type = type,
+            Quantity = quantity,
             Reason = MovementRules.ValidateReason(draft.Reason),
             RegisteredBy = MovementRules.ValidateRegisteredBy(draft.RegisteredBy),
             OccurredAtUtc = draft.OccurredAtUtc
@@ -44,6 +50,7 @@ public sealed class InventoryMovement
         {
             Id = Id,
             ProductId = ProductId,
+            SupplierId = SupplierId,
             Type = Type,
             Quantity = Quantity,
             Reason = Reason,

@@ -38,6 +38,7 @@ public sealed class MovementReadRepository : IMovementReadRepository
         return new MovementDto(
             record.Id,
             record.ProductId,
+            record.SupplierId,
             ((MovementType)record.MovementType).ToString(),
             record.Quantity,
             record.StockAfter,

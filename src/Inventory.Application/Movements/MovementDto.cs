@@ -5,6 +5,7 @@ namespace Inventory.Application.Movements;
 public sealed record MovementDto(
     Guid Id,
     Guid ProductId,
+    Guid? SupplierId,
     string Type,
     int Quantity,
     int StockAfter,
@@ -17,6 +18,7 @@ public sealed record MovementDto(
         return new MovementDto(
             movement.Id,
             movement.ProductId,
+            movement.SupplierId,
             movement.Type.ToString(),
             movement.Quantity,
             movement.StockAfter ?? throw new InvalidOperationException("The movement has not been registered yet."),

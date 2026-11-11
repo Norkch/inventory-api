@@ -26,7 +26,7 @@ public sealed class RegisterMovementHandler
 
     private MovementDraft CreateDraft(RegisterMovementCommand command)
     {
-        return new MovementDraft(command.ProductId, command.Type, command.Quantity, command.Reason, command.Registrant.Subject, _clock.UtcNow);
+        return new MovementDraft(command.ProductId, command.Type, command.Quantity, command.Reason, command.SupplierId, command.Registrant.Subject, _clock.UtcNow);
     }
 
     private static InventoryMovement EnsureRegistered(MovementRegistrationResult result, RegisterMovementCommand command)
@@ -35,6 +35,7 @@ public sealed class RegisterMovementHandler
         {
             MovementRegistrationStatus.Registered => result.Movement!,
             MovementRegistrationStatus.ProductNotFound => throw new NotFoundException(ProductMessages.ActiveProductNotFound(command.ProductId)),
+            MovementRegistrationStatus.SupplierNotAvailable => throw new ValidationException(MovementMessages.SupplierNotAvailable),
             MovementRegistrationStatus.InsufficientStock => throw new InsufficientStockException(MovementMessages.InsufficientStock),
             MovementRegistrationStatus.StockOverflow => throw new ConflictException(MovementMessages.StockOverflow),
             _ => throw new InvalidOperationException($"Unknown movement registration status '{result.Status}'.")

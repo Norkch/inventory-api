@@ -78,8 +78,34 @@ public sealed class InventoryMovementTests
         Assert.Null(movement.StockAfter);
     }
 
+    [Fact]
+    public void BR16_Create_KeepsTheSupplierOfAnEntry()
+    {
+        var supplierId = Guid.NewGuid();
+        var movement = InventoryMovement.Create(CreateDraft("Entry", 3, null) with { SupplierId = supplierId });
+        Assert.Equal(supplierId, movement.SupplierId);
+        Assert.Equal(supplierId, movement.WithStockAfter(3).SupplierId);
+    }
+
+    [Fact]
+    public void BR16_Create_Rejects_ExitWithSupplier()
+    {
+        var draft = CreateDraft("Exit", 1, null) with { SupplierId = Guid.NewGuid() };
+        var exception = Assert.Throws<ValidationException>(() => InventoryMovement.Create(draft));
+        Assert.Equal("Una salida no puede indicar proveedor.", exception.Message);
+    }
+
+    [Fact]
+    public void BR16_Create_ValidatesTheSupplierAfterTheTypeAndTheQuantity()
+    {
+        var invalidType = CreateDraft("Salida", 1, null) with { SupplierId = Guid.NewGuid() };
+        var invalidQuantity = CreateDraft("Exit", 0, null) with { SupplierId = Guid.NewGuid() };
+        Assert.Equal("El tipo de movimiento debe ser 'Entry' o 'Exit'.", Assert.Throws<ValidationException>(() => InventoryMovement.Create(invalidType)).Message);
+        Assert.Equal("La cantidad del movimiento debe ser un entero mayor que 0.", Assert.Throws<ValidationException>(() => InventoryMovement.Create(invalidQuantity)).Message);
+    }
+
     private static MovementDraft CreateDraft(string? type, int? quantity, string? reason)
     {
-        return new MovementDraft(ProductId, type, quantity, reason, Subject, OccurredAtUtc);
+        return new MovementDraft(ProductId, type, quantity, reason, null, Subject, OccurredAtUtc);
     }
 }

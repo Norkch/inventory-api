@@ -10,8 +10,10 @@ public sealed class RegisterMovementRequest
 
     public string? Reason { get; set; }
 
+    public Guid? SupplierId { get; set; }
+
     public RegisterMovementCommand ToCommand(Guid productId, MovementRegistrant registrant)
     {
-        return new RegisterMovementCommand(productId, Type, Quantity, Reason, registrant);
+        return new RegisterMovementCommand(productId, Type, Quantity, Reason, SupplierId, registrant);
     }
 }

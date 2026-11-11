@@ -28,13 +28,20 @@ IF OBJECT_ID('dbo.Suppliers') IS NULL
 CREATE TABLE dbo.Suppliers(
     Id           UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_Suppliers PRIMARY KEY,
     Name         NVARCHAR(200)    NOT NULL,
-    Nit        NVARCHAR(30)     NOT NULL,
+    Nit          NVARCHAR(30)     COLLATE SQL_Latin1_General_CP1_CI_AS NOT NULL,
     Email        NVARCHAR(200)    NULL,
     Phone        NVARCHAR(30)     NULL,
     IsActive     BIT              NOT NULL CONSTRAINT DF_Suppliers_IsActive DEFAULT 1,
     CreatedAtUtc DATETIME2        NOT NULL CONSTRAINT DF_Suppliers_CreatedAtUtc DEFAULT SYSUTCDATETIME(),
     UpdatedAtUtc DATETIME2        NULL
 );
+GO
+IF EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID('dbo.Suppliers') AND name = 'UX_Suppliers_Nit')
+   AND EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('dbo.Suppliers') AND name = 'Nit' AND collation_name <> 'SQL_Latin1_General_CP1_CI_AS')
+    DROP INDEX UX_Suppliers_Nit ON dbo.Suppliers;
+GO
+IF EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('dbo.Suppliers') AND name = 'Nit' AND collation_name <> 'SQL_Latin1_General_CP1_CI_AS')
+    ALTER TABLE dbo.Suppliers ALTER COLUMN Nit NVARCHAR(30) COLLATE SQL_Latin1_General_CP1_CI_AS NOT NULL;
 GO
 IF OBJECT_ID('dbo.Products') IS NULL
 CREATE TABLE dbo.Products(

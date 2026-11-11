@@ -5,4 +5,5 @@ public sealed record RegisterMovementCommand(
     string? Type,
     int? Quantity,
     string? Reason,
+    Guid? SupplierId,
     MovementRegistrant Registrant);

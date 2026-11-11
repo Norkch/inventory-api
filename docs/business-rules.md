@@ -33,7 +33,7 @@
 | BR-13 | Los movimientos son inmutables; una corrección es un movimiento nuevo | Núcleo | El endpoint no existe |
 | BR-14 | El cambio de stock y el registro del movimiento ocurren en una sola transacción | Todo o nada |
 | BR-15 | Dos salidas simultáneas no pueden dejar el stock negativo | 409 para la que pierde |
-| BR-16 | Una entrada puede indicar el proveedor (asociado al producto); una salida no lleva proveedor. **Aplazada:** `add-inventory-movements` no la implementa; `SupplierId` queda `NULL` y un `supplierId` en el cuerpo se ignora | 400 |
+| BR-16 | Una entrada puede indicar el proveedor, que debe estar activo y asociado al producto; una salida no lleva proveedor. Implementada en `add-suppliers` | 400 |
 | BR-17 | Todas las fechas se guardan en UTC |  |
 | BR-18 | Los listados se paginan: page desde 1, pageSize de 1 a 100 (por defecto 20) | 400 |
 | BR-19 | Todos los endpoints requieren token. inventory.read para lecturas y inventory.write para escrituras | 401 sin token, 403 sin permiso |

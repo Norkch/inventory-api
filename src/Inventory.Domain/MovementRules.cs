@@ -49,6 +49,16 @@ public static class MovementRules
         return trimmedReason;
     }
 
+    public static Guid? ValidateSupplier(MovementType type, Guid? supplierId)
+    {
+        if (type == MovementType.Exit && supplierId is not null)
+        {
+            throw new ValidationException("Una salida no puede indicar proveedor.");
+        }
+
+        return supplierId;
+    }
+
     public static string ValidateRegisteredBy(string? registeredBy)
     {
         var author = registeredBy ?? string.Empty;

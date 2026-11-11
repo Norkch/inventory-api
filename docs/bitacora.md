@@ -478,3 +478,200 @@ Los tres pasos en Swagger UI los hizo a mano la persona responsable del proyecto
 
   `MovementWriteRepository` y `MovementReadRepository` están al 0 %, como los repositorios de los cambios anteriores.
 - **Aprendí:** el único hallazgo bloqueante fue una línea en blanco que yo había leído como "antes de salir del método". La regla dice `return`, no "salida", y el revisor tenía razón al aplicarla al pie de la letra. El hallazgo más útil, sin embargo, fue el de la prueba BR-15: pasaba, pero su nombre afirmaba algo que no comprobaba.
+
+## E6 · Proveedores — tarea 11.1 (verificación de extremo a extremo)
+- **Fecha:** 10-11-2026
+- **Cambio de OpenSpec:** `add-suppliers`
+- **Entorno:** `docker compose up -d --build` sobre el volumen `inventory-api_sqldata`, con la imagen de la API construida después de las correcciones de la revisión de Clean Code (tarea 10.1). `dbinit` terminó con código 0.
+- **Cómo se ejecutó:** los escenarios los ejecutó un guion de Python fuera del repositorio:
+  - las peticiones se hicieron con `urllib`;
+  - las peticiones simultáneas se lanzaron con hilos y una barrera;
+  - las comprobaciones en la base se hicieron con `sqlcmd` dentro del contenedor (`-I`, por `QUOTED_IDENTIFIER`);
+  - los tokens de `inventory-client` (`read write`, solo `read` y solo `write`) se pidieron a Keycloak con `client_credentials`, y los secretos se leyeron de `.env` sin imprimirlos.
+
+  El recorrido válido es el de la ejecución con sufijo `2803`, con **117/117** escenarios con el resultado esperado.
+- **Preparación con `sqlcmd`, solo sobre productos de prueba:** `StockQuantity = 2147483000` en un producto nuevo, para el escenario "Proveedor no asociado y entrada que desborda el stock".
+- **Ejecuciones anteriores:**
+  - **Sufijo `9082`:** 117/117, pero con la imagen anterior a la tarea 10.1. Se repitió con la imagen final.
+  - **Sufijo `7141`:** 116/117. El único fallo fue de la comprobación del guion, no de la API. Ver "Aprendí".
+- **Datos de prueba:** quedan en la base de desarrollo, con los sufijos `9082`, `7141` y `2803` y los de las pruebas rápidas de las tareas 6.2, 8.3 y 9.3 (`SMOKE-62-…`, `Humo83-…`, `Humo93-…`). Los movimientos son inmutables, así que no se borraron. Se eliminan con `docker compose down -v`.
+
+### `specs/suppliers`, `specs/product-suppliers` y `specs/inventory-movements` (MODIFIED)
+#### Alta y validación
+
+| Escenario | Petición | Resultado | ¿Esperado? |
+|---|---|---|---|
+| Alta correcta | nombre, NIT, correo y teléfono válidos | 201, `Location` True, `createdAtUtc` con `Z`, `updatedAtUtc` None | Sí |
+| Alta sin correo ni teléfono | solo `name` y `nit` | 201, `email` None, `phone` None | Sí |
+| Token sin `inventory.write` / sin token | `POST` con token solo `read` / sin token | 403 / 401 | Sí |
+| Nombre con espacios en los extremos | `{"name": "  Ferretería Andina  "}` | 201, `name` 'Ferretería Andina' | Sí |
+| Nombre ausente | `{"name": null}` | 400 `El nombre del proveedor es obligatorio.` | Sí |
+| Nombre solo con espacios | `{"name": "   "}` | 400 `El nombre del proveedor es obligatorio.` | Sí |
+| Nombre de 200 caracteres | `{"name": "<200 caracteres>"}` | 201 | Sí |
+| Nombre de 201 caracteres | `{"name": "<201 caracteres>"}` | 400 `El nombre del proveedor no puede superar los 200 caracteres.` | Sí |
+| NIT con espacios en los extremos | `{"nit": "  TRIM-2803  "}` | 201, `nit` 'TRIM-2803' | Sí |
+| NIT ausente | `{"nit": null}` | 400 `El NIT del proveedor es obligatorio.` | Sí |
+| NIT solo con espacios | `{"nit": "   "}` | 400 `El NIT del proveedor es obligatorio.` | Sí |
+| NIT de 30 caracteres | `{"nit": "N30280399999999999999999999999"}` | 201 | Sí |
+| NIT de 31 caracteres | `{"nit": "9999999999999999999999999999999"}` | 400 `El NIT del proveedor no puede superar los 30 caracteres.` | Sí |
+| Correo con espacios en los extremos | `{"email": "  Juan@Mail.com  "}` | 201, `email` 'Juan@Mail.com' | Sí |
+| Correo solo con espacios | `{"email": "   "}` | 201, `email` None | Sí |
+| Correo sin arroba | `{"email": "juan.mail.com"}` | 400 `El correo del proveedor no tiene un formato válido.` | Sí |
+| Correo sin extensión | `{"email": "juan@mail"}` | 400 `El correo del proveedor no tiene un formato válido.` | Sí |
+| Correo con espacios internos | `{"email": "juan perez@mail.com"}` | 400 `El correo del proveedor no tiene un formato válido.` | Sí |
+| Correo con dos arrobas | `{"email": "juan@@mail.com"}` | 400 `El correo del proveedor no tiene un formato válido.` | Sí |
+| Correo de 201 caracteres | `{"email": "<201 caracteres>"}` | 400 `El correo del proveedor no puede superar los 200 caracteres.` | Sí |
+| Teléfono con prefijo, espacios y guiones | `{"phone": "+57 300-123-4567"}` | 201, `phone` '+57 300-123-4567' | Sí |
+| Teléfono solo con espacios | `{"phone": "   "}` | 201, `phone` None | Sí |
+| Teléfono con 7 dígitos | `{"phone": "123-4567"}` | 201 | Sí |
+| Teléfono con 6 dígitos | `{"phone": "123-456"}` | 400 `El teléfono del proveedor no tiene un formato válido.` | Sí |
+| Teléfono con 16 dígitos | `{"phone": "1234567890123456"}` | 400 `El teléfono del proveedor no tiene un formato válido.` | Sí |
+| Teléfono con letras | `{"phone": "300 ABC 4567"}` | 400 `El teléfono del proveedor no tiene un formato válido.` | Sí |
+| Teléfono con el signo más en medio | `{"phone": "300+1234567"}` | 400 `El teléfono del proveedor no tiene un formato válido.` | Sí |
+| Teléfono de 31 caracteres | `{"phone": "1--2-3-4-5-6-7-8-9-0-1-2-3-4--5"}` | 400 `El teléfono del proveedor no puede superar los 30 caracteres.` | Sí |
+| Nombre repetido | mismo `name` que otro proveedor activo, otro NIT | 201 | Sí |
+
+#### NIT único y reservado (BR-08)
+
+| Escenario | Petición | Resultado | ¿Esperado? |
+|---|---|---|---|
+| NIT repetido | `nit` 9002803111-1 ya existente | 409 `Ya existe un proveedor con el NIT '9002803111-1'.` | Sí |
+| NIT repetido con otras mayúsculas | `ABC-2803` existente, alta con `abc-2803` | 409 | Sí |
+| NIT de un proveedor desactivado | NIT de un proveedor desactivado (`DELETE` 204) | 409 `Ya existe un proveedor con el NIT 'DES-2803'.` | Sí |
+| Altas simultáneas con el mismo NIT | 5 rondas de dos altas a la vez con el mismo NIT | [201, 409] filas 1; [201, 409] filas 1; [201, 409] filas 1; [201, 409] filas 1; [201, 409] filas 1 | Sí |
+| Orden: correo inválido y NIT repetido | NIT repetido con `email` `juan@mail` | 400 `El correo del proveedor no tiene un formato válido.` | Sí |
+
+#### Consulta, listado, edición y desactivación
+
+| Escenario | Petición | Resultado | ¿Esperado? |
+|---|---|---|---|
+| Proveedor activo | `GET` por id | 200, campos ['createdAtUtc', 'email', 'id', 'name', 'nit', 'phone', 'updatedAtUtc'] | Sí |
+| Id inexistente | `GET` de un GUID sin proveedor | 404 `No existe un proveedor activo con el id '0b1beb4f-b841-4ae7-a147-ccb9f3b23161'.` | Sí |
+| Proveedor desactivado (`GET`) | `GET` de un proveedor desactivado | 404 `No existe un proveedor activo con el id 'a2d0822a-0a19-491d-9684-e19138d73c22'.` | Sí |
+| Token sin `inventory.read` (`GET` por id) | token solo `write` | 403 | Sí |
+| Primera página por defecto | `GET /api/suppliers` sin parámetros | 200, `page` 1, `pageSize` 20, 20 elementos de `totalCount` 111, `totalPages` 6 | Sí |
+| Orden por nombre | tres proveedores creados en otro orden | ['Aceros Norte', 'Maderas Centro', 'Tornillos Sur'] | Sí |
+| Proveedores con el mismo nombre | dos proveedores con el mismo `name`, dos consultas | mismo orden en las dos consultas y que `ORDER BY Id` de SQL Server | Sí |
+| Excluye los desactivados | desactivar un proveedor listado | `totalCount` 117 → 116; el desactivado no aparece | Sí |
+| `pageSize` igual a 101 | `?pageSize=101` | 400 `El parámetro 'pageSize' debe ser un número entero entre 1 y 100.` | Sí |
+| Token sin `inventory.read` (listado) | token solo `write` | 403 | Sí |
+| Edición correcta | `PUT` con nombre, correo y teléfono nuevos | 200, `nit` 9002803456-9, `updatedAtUtc` informado | Sí |
+| Edición sin correo ni teléfono | `PUT` solo con `name` | 200, `email` None, `phone` None | Sí |
+| Edición con un nombre vacío | `PUT` con `name` vacío | 400 `El nombre del proveedor es obligatorio.`; nombre sigue `Andina` | Sí |
+| Edición con un teléfono inválido | `PUT` con `phone` `123` | 400 `El teléfono del proveedor no tiene un formato válido.` | Sí |
+| Edición con otro NIT | `PUT` con `nit` distinto | 200, `nit` 9002803456-9 | Sí |
+| Edición con un NIT inválido | `PUT` con `nit` vacío | 200, `nit` 9002803456-9 | Sí |
+| Proveedor desactivado (`PUT`) | `PUT` sobre un desactivado | 404 | Sí |
+| Id inexistente (`PUT`) | `PUT` sobre un GUID sin proveedor | 404 | Sí |
+| Token sin `inventory.write` (`PUT`) | token solo `read` | 403 | Sí |
+| Desactivar un proveedor activo | `DELETE` | 204, cuerpo vacío True; `GET` posterior 404 | Sí |
+| Ya desactivado / inexistente / sin `inventory.write` | `DELETE` repetido / GUID sin proveedor / token solo `read` | 404 / 404 / 403 | Sí |
+| No se reactiva y conserva la fila | fila del proveedor desactivado en la base | `IsActive` 0, `UpdatedAtUtc` informado True | Sí |
+
+#### Asociación producto-proveedor
+
+| Escenario | Petición | Resultado | ¿Esperado? |
+|---|---|---|---|
+| Asociación correcta | `supplierId` y `supplierSku` `FA-778` | 201, `Location` correcto True, `productName` y `supplierName` informados | Sí |
+| Asociación sin código del proveedor | solo `supplierId` | 201, `supplierSku` None | Sí |
+| Token sin `inventory.write` | token solo `read` | 403 | Sí |
+| `supplierSku` con espacios en los extremos | `supplierSku` '  FA-778  ' | 201, `supplierSku` FA-778 | Sí |
+| `supplierSku` solo con espacios | `supplierSku` '   ' | 201, `supplierSku` None | Sí |
+| `supplierSku` de 50 caracteres | `supplierSku` de 50 caracteres | 201, `supplierSku` <50 caracteres> | Sí |
+| `supplierSku` de 51 caracteres | `supplierSku` de 51 caracteres | 400 `El código del producto en el proveedor no puede superar los 50 caracteres.` | Sí |
+| Producto inexistente | `POST` sobre un GUID sin producto | 404 `No existe un producto activo con el id '6376ac87-47ca-454b-a90e-3c8d6a8ff08d'.` | Sí |
+| Producto borrado | producto borrado (`DELETE` 204) | 404; asociaciones en la base 0 | Sí |
+| `supplierId` ausente | cuerpo sin `supplierId` | 400 `El proveedor es obligatorio.` | Sí |
+| `supplierId` que no es un GUID | `"supplierId": "abc"` | 400 `El cuerpo de la petición no es un JSON válido.` | Sí |
+| Proveedor inexistente | `supplierId` sin proveedor | 400 `El proveedor indicado no existe o no está activo.` | Sí |
+| Proveedor desactivado | `supplierId` de un proveedor desactivado | 400 `El proveedor indicado no existe o no está activo.` | Sí |
+| Alta simultánea con la desactivación del proveedor (BR-09) | 5 rondas: alta y `DELETE` del proveedor a la vez | alta 400, desactivación 204, filas 0; alta 400, desactivación 204, filas 0; alta 400, desactivación 204, filas 0; alta 201, desactivación 204, filas 1; alta 201, desactivación 204, filas 1; hay fila si y solo si el alta respondió 201 | Sí |
+| Pareja repetida (BR-10) | volver a asociar la misma pareja | 409 `El proveedor ya está asociado al producto.` | Sí |
+| Un producto con varios proveedores / un proveedor con varios productos | segundo proveedor del producto / segundo producto del proveedor | 201 (anterior) / 201 | Sí |
+| Altas simultáneas de la misma pareja | 5 rondas de dos altas a la vez de la misma pareja | [201, 409] filas 1; [201, 409] filas 1; [201, 409] filas 1; [201, 409] filas 1; [201, 409] filas 1 | Sí |
+| Orden: `supplierSku` inválido sobre producto inexistente | `supplierSku` de 51 caracteres en un GUID sin producto | 400 | Sí |
+| Orden: proveedor desactivado sobre producto borrado | ambos inactivos | 404 | Sí |
+| Orden: pareja repetida con el proveedor desactivado | pareja ya asociada, proveedor desactivado después | 400 `El proveedor indicado no existe o no está activo.` | Sí |
+| `DELETE` y `PUT` sobre una asociación | `DELETE` y `PUT` de la pareja | `DELETE` 405, `PUT` 405; la fila no cambia | Sí |
+| Producto recién creado | `GET` de los proveedores de un producto nuevo | 200, `totalCount` 0 | Sí |
+
+#### Consultas de asociaciones
+
+| Escenario | Petición | Resultado | ¿Esperado? |
+|---|---|---|---|
+| Asociación visible | `GET` de una pareja activa | 200, campos ['createdAtUtc', 'productId', 'productName', 'supplierId', 'supplierName', 'supplierSku'] | Sí |
+| Pareja no asociada | `GET` de una pareja sin asociar | 404 `El proveedor no está asociado al producto.` | Sí |
+| Token sin `inventory.read` (pareja) | token solo `write` | 403 | Sí |
+| Orden por nombre del proveedor | tres proveedores asociados en otro orden | ['Aceros Norte', 'Maderas Centro', 'Tornillos Sur'] | Sí |
+| Excluye los proveedores desactivados | desactivar uno de los tres | 200, `totalCount` 2 | Sí |
+| Proveedor desactivado (pareja) | `GET` de la pareja con el proveedor desactivado | 404 `El proveedor no está asociado al producto.` | Sí |
+| Solo las asociaciones del producto | otro producto con asociaciones propias | todos los `productId` son del producto: True | Sí |
+| `pageSize` igual a 101 (por producto) | `?pageSize=101` | 400 | Sí |
+| Token sin `inventory.read` (por producto) | token solo `write` | 403 | Sí |
+| Producto borrado con asociaciones | listado de un producto borrado | 404 `No existe un producto activo con el id '93c081e6-4469-480f-bd15-41ae538307a9'.` | Sí |
+| Producto borrado (pareja) | `GET` de la pareja con el producto borrado | 404 | Sí |
+| Paginación inválida sobre producto borrado | `?page=0` | 400 | Sí |
+| Orden por nombre del producto | tres productos asociados en otro orden | ['Arandela', 'Tornillo', 'Tuerca'] | Sí |
+| Excluye los productos borrados | borrar uno de los tres | 200, `totalCount` 2 | Sí |
+| Proveedor activo sin productos | proveedor sin asociaciones | 200, `totalCount` 0 | Sí |
+| Token sin `inventory.read` (por proveedor) | token solo `write` | 403 | Sí |
+| Proveedor desactivado con asociaciones | listado de un proveedor desactivado | 404 `No existe un proveedor activo con el id 'd624ce4d-4c03-40b0-944a-346b295dbf48'.` | Sí |
+| Paginación inválida sobre proveedor desactivado | `?pageSize=0` | 400 | Sí |
+| La desactivación conserva las asociaciones | filas del proveedor desactivado en la base | 3 filas | Sí |
+
+#### Proveedor en las entradas (BR-16)
+
+| Escenario | Petición | Resultado | ¿Esperado? |
+|---|---|---|---|
+| Entrada con un proveedor asociado | entrada de 10 con el proveedor asociado | 201, `supplierId` correcto True, `stockAfter` 10 | Sí |
+| Entrada sin proveedor / Entrada correcta (MODIFIED) | entrada sin `supplierId` | 201, `supplierId` None, `supplierId` tras `productId` True | Sí |
+| Salida correcta (MODIFIED) | salida de 4 | 201, `stockAfter` 7, `supplierId` None | Sí |
+| Entrada con un proveedor no asociado | proveedor activo no asociado | 400 `El proveedor indicado no está activo o no está asociado al producto.`; stock 7→7, movimientos 3→3 | Sí |
+| Entrada con un proveedor desactivado | proveedor asociado y desactivado | 400 `El proveedor indicado no está activo o no está asociado al producto.` | Sí |
+| Entrada con un proveedor inexistente | `supplierId` sin proveedor | 400 `El proveedor indicado no está activo o no está asociado al producto.` | Sí |
+| `supplierId` que no es un GUID | `"supplierId": "abc"` | 400 `El cuerpo de la petición no es un JSON válido.` | Sí |
+| Salida con un proveedor / Salida con `supplierId` (MODIFIED) | salida válida con `supplierId` | 400 `Una salida no puede indicar proveedor.`; stock y movimientos sin cambios True | Sí |
+| Salida con `supplierId` nulo | `"supplierId": null` | 201, `supplierId` None | Sí |
+| Campos fuera del contrato se ignoran | `stockAfter` 99 y `occurredAtUtc` del año 2000 | 201, `stockAfter` 8, año 2026 | Sí |
+| Token sin `inventory.write` | token solo `read` | 403 | Sí |
+| Salida con `supplierId` sobre producto borrado | producto borrado | 400 | Sí |
+| Orden: cuerpo inválido sobre producto inexistente | `quantity` 0 en un GUID sin producto | 400 | Sí |
+| Orden: salida excesiva sobre producto borrado | salida de 100 | 404 | Sí |
+| Orden: proveedor no asociado sobre producto borrado | entrada con proveedor no asociado | 404 | Sí |
+| Orden: proveedor no asociado y entrada que desborda | stock 2147483000 (`sqlcmd`), entrada de 1000 con proveedor no asociado | 400 `El proveedor indicado no está activo o no está asociado al producto.`; stock 2147483000 | Sí |
+| Entrada simultánea con la desactivación del proveedor | 5 rondas: entrada y `DELETE` del proveedor a la vez | entrada 400, desactivación 204, movimientos 0, stock 0; entrada 400, desactivación 204, movimientos 0, stock 0; entrada 201, desactivación 204, movimientos 1, stock 1; entrada 400, desactivación 204, movimientos 0, stock 0; entrada 400, desactivación 204, movimientos 0, stock 0; hay movimiento (y stock) si y solo si la entrada respondió 201 | Sí |
+| Proveedor en el historial | listado del producto | entrada con `supplierId` 1; salidas con `supplierId` `null` True | Sí |
+| Proveedor desactivado en el historial | desactivar el proveedor y volver a listar | la entrada conserva `supplierId`: True | Sí |
+| Listado: sin `inventory.read` / `pageSize` 101 | token solo `write` / `?pageSize=101` | 403 / 400 | Sí |
+
+### Concurrencia (BR-08, BR-09 y BR-10)
+
+- En las cinco rondas de cada carrera salió siempre uno de los dos resultados que admite la spec.
+- En las carreras con la desactivación del proveedor salieron **los dos órdenes**: unas veces ganó el alta o la entrada (201 y 204) y otras la desactivación (400 y 204). Así que el bloqueo `UPDLOCK, HOLDLOCK` se ejercitó de verdad.
+- En cada ronda, la fila de la asociación o el movimiento (con su stock) existe **si y solo si** la operación respondió 201.
+
+### Aprendí
+
+- La primera versión del guion comprobaba BR-09 comparando fechas: "ninguna asociación con `CreatedAtUtc` posterior al `UpdatedAtUtc` de la desactivación". Esa comprobación falló en 3 rondas, por 32 a 87 microsegundos, aunque los pares de estados eran correctos.
+- La causa es que las dos fechas salen de `IClock` en el handler, **antes** de conseguir el bloqueo. La desactivación leyó el reloj un poco antes, pero esperó a que terminara el alta, que tenía la fila bloqueada y la vio activa.
+- Es el mismo riesgo que ya está registrado para el orden de los movimientos (D5 de `add-inventory-movements`): las fechas de la aplicación no reflejan el orden en que se confirman las operaciones.
+- La garantía real de BR-09 es que las sentencias exigen `IsActive = 1` mientras tienen la fila bloqueada. Por eso la comprobación correcta es "hay fila si y solo si la respuesta fue 201", y así quedó el guion.
+
+## E6 · Proveedores — tarea 11.1 (cobertura)
+- **`dotnet build` / `dotnet test`:** 0 advertencias y 0 errores; 401/401 pruebas correctas.
+- **Cobertura con Coverlet** (`dotnet test --collect:"XPlat Code Coverage"`, formato Cobertura):
+
+  | Ensamblado | Líneas | Ramas |
+  |---|---|---|
+  | `Inventory.Domain` | 100,0 % | 97,4 % |
+  | `Inventory.Application` | 99,4 % | 95,2 % |
+  | `Inventory.Api` | 75,9 % | 84,5 % |
+  | `Inventory.Infrastructure` | 3,4 % | 5,3 % |
+  | **Total** | **64,0 % (1306/2040)** | **68,5 %** |
+
+  Casi todas las clases nuevas de Domain, Application y Api están al 100 %. Las que no:
+  - **`LinkProductSupplierHandler` (94,4 %):** falta el brazo `_ => throw InvalidOperationException`, que corresponde a un estado que no existe.
+  - **`ProductSupplierDto` (85,7 %):** faltan miembros generados del record que las pruebas no usan.
+  - **`SuppliersServiceCollectionExtensions` y `ProductSuppliersServiceCollectionExtensions` (0 %):** solo se ejecutan al arrancar la API.
+
+  Los repositorios y registros de Infrastructure de proveedores y asociaciones están al 0 %, como los de los cambios anteriores. Su comportamiento lo cubre el recorrido de extremo a extremo de arriba. El total baja algo frente a E5 (65,0 %), porque este cambio añade más código de Infrastructure que de Domain y Application.
